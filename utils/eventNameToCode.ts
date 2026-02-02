@@ -1,0 +1,20 @@
+export const eventNameToCode: Record<string, number> = {
+  "50 Free": 1,
+  "100 Free": 2,
+  "200 Free": 3,
+  "400 Free": 4,
+  "800 Free": 5,
+  "1500 Free": 6,
+  "50 Breast": 7,
+  "100 Breast": 8,
+  "200 Breast": 9,
+  "50 Back": 10,
+  "100 Back": 11,
+  "200 Back": 12,
+  "50 Fly": 13,
+  "100 Fly": 14,
+  "200 Fly": 15,
+  "100 IM": 16,
+  "200 IM": 17,
+  "400 IM": 18
+};
