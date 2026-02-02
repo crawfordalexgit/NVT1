@@ -17,7 +17,11 @@ export function calculateMonthlyCutoff(
 			const month = getMonthKey(pb.date);
 			if (!month) return;
 			if (!groupedByMonth[month]) groupedByMonth[month] = [];
-			groupedByMonth[month].push({ name: swimmer.name, time: pb.time, date: pb.date });
+			let timeVal: number | null = null;
+			if (pb.time == null) timeVal = null;
+			else if (typeof pb.time === 'number') timeVal = pb.time;
+			else if (typeof pb.time === 'string') timeVal = parseTimeString(pb.time);
+			groupedByMonth[month].push({ name: swimmer.name, time: timeVal, date: pb.date });
 		});
 	});
 	const months = Object.keys(groupedByMonth).sort();
@@ -90,7 +94,10 @@ export function calculateMonthlyCutoff(
 	const tracked = swimmers.find(s => s.name === trackedName);
 	const trackedSeries: { month: string; time: number | null }[] = months.map(month => {
 		const swims = tracked?.data.filter(pb => getMonthKey(pb.date) === month && pb.time != null) || [];
-		const best = swims.length > 0 ? Math.min(...swims.map(pb => pb.time!)) : null;
+		const times = swims
+			.map(pb => (typeof pb.time === 'number' ? pb.time : (typeof pb.time === 'string' ? parseTimeString(pb.time) : null)))
+			.filter((t): t is number => t != null && !isNaN(t));
+		const best = times.length > 0 ? Math.min(...times) : null;
 		return { month, time: best };
 	});
 

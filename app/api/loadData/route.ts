@@ -3,8 +3,13 @@ import { buildRankingsUrl } from "@/lib/swimUrls";
 import * as cheerio from "cheerio";
 
 export async function GET(req: NextRequest) {
-	const { pool, stroke, sex, ageGroup, date } = Object.fromEntries(req.nextUrl.searchParams);
-	const url = buildRankingsUrl({ pool, stroke: Number(stroke), sex, ageGroup, date });
+	const params = Object.fromEntries(req.nextUrl.searchParams) as Record<string, string>;
+	const poolParam = params.pool === 'L' || params.pool === 'S' ? params.pool : 'L';
+	const strokeNum = params.stroke ? Number(params.stroke) : 0;
+	const sexParam = params.sex === 'M' || params.sex === 'F' ? params.sex : 'M';
+	const ageGroup = params.ageGroup ?? '';
+	const date = params.date ?? '';
+	const url = buildRankingsUrl({ pool: poolParam as "L" | "S", stroke: strokeNum, sex: sexParam, ageGroup, date });
 	const res = await fetch(url);
 	if (!res.ok) return Response.json({ error: "Failed to fetch rankings" }, { status: 500 });
 	const html = await res.text();

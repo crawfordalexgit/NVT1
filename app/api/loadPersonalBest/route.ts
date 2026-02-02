@@ -4,8 +4,14 @@ import { parseTimeString } from "@/lib/time";
 import * as cheerio from "cheerio";
 
 export async function GET(req: NextRequest) {
-	const { pool, stroke, sex, ageGroup, tiref, date } = Object.fromEntries(req.nextUrl.searchParams);
-	const url = buildPersonalBestUrl({ pool, stroke: Number(stroke), sex, ageGroup, tiref, date });
+	const params = Object.fromEntries(req.nextUrl.searchParams) as Record<string, string>;
+	const poolParam = params.pool === 'L' || params.pool === 'S' ? params.pool : 'L';
+	const strokeNum = params.stroke ? Number(params.stroke) : 0;
+	const sexParam = params.sex === 'M' || params.sex === 'F' ? params.sex : 'M';
+	const ageGroup = params.ageGroup ?? '';
+	const tiref = params.tiref ?? '';
+	const date = params.date ?? '';
+	const url = buildPersonalBestUrl({ pool: poolParam as "L" | "S", stroke: strokeNum, sex: sexParam, ageGroup, tiref, date });
 	const res = await fetch(url);
 	if (!res.ok) return Response.json({ error: "Failed to fetch personal bests" }, { status: 500 });
 	const html = await res.text();

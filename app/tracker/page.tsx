@@ -130,10 +130,10 @@ export default function TrackerPage() {
 				{allSwimmersBests.length > 0 && swimmer && ((() => {
 					const { cutoffSeries, trackedSeries } = calculateMonthlyCutoffFromTop50(allSwimmersBests, rankings.map(r => ({ name: r.name, time: r.time })), swimmer);
 					// Build debug table data: grouped by month, sorted by time
-					const groupedByMonth: Record<string, { name: string; time: number | null; date: string; meet?: string }[]> = {};
-					allSwimmersBests.forEach(swimmerObj => {
-						const rankForSwimmer = rankings.find(r => r.name === swimmerObj.name)?.rank ?? null;
-						swimmerObj.data.forEach(pb => {
+					const groupedByMonth: Record<string, { name: string; time: number | null; date: string; meet?: string; rank?: number | null }[]> = {};
+					allSwimmersBests.forEach((swimmerObj: any) => {
+						const rankForSwimmer = rankings.find((r: any) => r.name === swimmerObj.name)?.rank ?? null;
+						swimmerObj.data.forEach((pb: any) => {
 							const month = getMonthKey(pb.date);
 							if (!month) return;
 							if (!groupedByMonth[month]) groupedByMonth[month] = [];
