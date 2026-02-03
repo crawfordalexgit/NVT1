@@ -8,13 +8,13 @@ export const eventNameToCode: Record<string, number> = {
   "50 Breast": 7,
   "100 Breast": 8,
   "200 Breast": 9,
-  "50 Back": 10,
-  "100 Back": 11,
-  "200 Back": 12,
-  "50 Fly": 13,
-  "100 Fly": 14,
-  "200 Fly": 15,
-  "100 IM": 16,
-  "200 IM": 17,
-  "400 IM": 18
+  "50 Fly": 10,
+  "100 Fly": 11,
+  "200 Fly": 12,
+  "50 Back": 13,
+  "100 Back": 14,
+  "200 Back": 15,
+  "200 IM": 16,
+  "400 IM": 17,
+  "100 IM": 18
 };
