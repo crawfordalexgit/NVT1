@@ -148,6 +148,7 @@ export function calculateMonthlyCutoffFromTop50(
 	swimmers: { name: string; data: { date: string; time: number | string | null; meet?: string }[] }[],
 	rankings: { name: string; time: number | string }[],
 	trackedName?: string,
+	ageGroup: string = '13',
 	monthsToShow = 12
 ): { cutoffSeries: { month: string; cutoff: number | null; reason?: string }[]; trackedSeries: { month: string; time: number | null }[] } {
 	// group swims by month
@@ -164,9 +165,11 @@ export function calculateMonthlyCutoffFromTop50(
 	// limit to last N months
 	if (months.length > monthsToShow) months = months.slice(months.length - monthsToShow);
 
-	// parse today's top-50 times and determine floor (20th)
+	// determine cutoff size: 20 only for 13 year olds; 40 for age 14+
+	const cutoffSize = ageGroup === '13' ? 20 : 40;
+	// parse today's top-50 times and determine floor (cutoffSize-th)
 	const top50 = (rankings || []).slice(0, 50).map(r => ({ name: r.name, time: typeof r.time === 'number' ? r.time : (typeof r.time === 'string' ? parseTimeString(String(r.time)) : null) }));
-	const floor = top50[19]?.time ?? null;
+	const floor = top50[cutoffSize - 1]?.time ?? null;
 
 	const cutoffSeries: { month: string; cutoff: number | null; reason?: string }[] = [];
 	let lastCutoff: number | null = null;
@@ -194,16 +197,16 @@ export function calculateMonthlyCutoffFromTop50(
 		// keep track whether we computed a candidate from data (non-null)
 		let originalCandidate: number | null = null;
 
-		if (eligible.length >= 20) {
-			const virtual20 = eligible[19];
+		if (eligible.length >= cutoffSize) {
+			const virtualNth = eligible[cutoffSize - 1];
 			// find slowest swim by that swimmer in the month
-			const swimsThisMonth = (virtual20.swimmer?.data || []).filter((s: any) => getMonthKey(s.date) === month && s.time != null).map((s: any) => (typeof s.time === 'number' ? s.time : (typeof s.time === 'string' ? parseTimeString(s.time) : null))).filter((x: any): x is number => x != null && !isNaN(x));
+			const swimsThisMonth = (virtualNth.swimmer?.data || []).filter((s: any) => getMonthKey(s.date) === month && s.time != null).map((s: any) => (typeof s.time === 'number' ? s.time : (typeof s.time === 'string' ? parseTimeString(s.time) : null))).filter((x: any): x is number => x != null && !isNaN(x));
 			if (swimsThisMonth.length > 0) {
 				cutoff = Math.max(...swimsThisMonth);
-				reason = `virtual20 swim in month: ${virtual20.name}`;
+				reason = `virtual${cutoffSize} swim in month: ${virtualNth.name}`;
 			} else {
-				cutoff = virtual20.cumulativeBest;
-				reason = `virtual20 cumulativeBest (no month swim)`;
+				cutoff = virtualNth.cumulativeBest;
+				reason = `virtual${cutoffSize} cumulativeBest (no month swim)`;
 			}
 			originalCandidate = cutoff;
 		} else {

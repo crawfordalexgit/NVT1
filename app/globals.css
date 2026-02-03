@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
 @import "tailwindcss";
 
 :root {
@@ -20,7 +21,60 @@
 }
 
 body {
-  background: var(--background);
+  background: radial-gradient(1200px 600px at 10% 10%, #071028 0%, transparent 20%), linear-gradient(180deg,#020617 0%, #061226 100%);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  -webkit-font-smoothing: antialiased;
 }
+
+/* Card accents */
+.card {
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+  border: 1px solid rgba(255,255,255,0.04);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.accent {
+  color: #4fd1c5; /* teal accent similar to swimweb */
+}
+
+.btn-accent {
+  background: linear-gradient(90deg, #06b6d4, #4fd1c5);
+  color: #022; /* dark text on bright accent */
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-weight: 600;
+}
+
+.sidebar-link {
+  display: block;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: #dbeafe;
+}
+.sidebar-link:hover { background: rgba(255,255,255,0.03); }
+
+/* Swimmer animation */
+@keyframes swim-move {
+  0% { left: -20%; transform: translateY(-50%) scaleX(0.9) rotate(-2deg); }
+  50% { left: 50%; transform: translateY(-52%) scaleX(1) rotate(0deg); }
+  100% { left: 120%; transform: translateY(-50%) scaleX(0.9) rotate(2deg); }
+}
+
+@keyframes swim-bob {
+  0% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+  100% { transform: translateY(0); }
+}
+
+.swim-track { position: relative; overflow: hidden; }
+.swimmer { position: absolute; top: 50%; left: -20%; transform: translateY(-50%); animation: swim-move 22s cubic-bezier(.2,.8,.2,1) infinite, swim-fade 1200ms ease-in 0s 1 both; width: 96px; }
+.swimmer img, .swimmer svg { width: 96px; height: auto; }
+.swimmer .body { animation: swim-bob 1.6s ease-in-out infinite; transform-origin: center; }
+
+@keyframes swim-fade {
+  0% { opacity: 0; transform: translateY(-45%) scale(0.95); }
+  100% { opacity: 1; transform: translateY(-50%) scale(1); }
+}
+.swim-track .lane { position: absolute; left: 0; right: 0; height: 2px; background: rgba(255,255,255,0.06); top: 50%; transform: translateY(-50%); }

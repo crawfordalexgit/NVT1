@@ -1,14 +1,18 @@
 "use client";
 import React, { useState } from "react";
+import { useSearchParams } from 'next/navigation';
 import { eventNameToCode } from "@/utils/eventNameToCode";
-import { LineGraph, MonthlyCutoffGraph } from "@/app/components/Charts";
+import { LineGraph, MonthlyCutoffGraph, RankGraph } from "@/app/components/Charts";
+import Report from "@/app/components/Report";
 import { calculateMonthlyCutoff, calculateMonthlyCutoffFromTop50, parseTimeString, formatTimeValue, getMonthKey } from "@/lib/time";
 
 const eventOptions = Object.keys(eventNameToCode);
 
 export default function TrackerPage() {
+	const search = useSearchParams();
 	const [event, setEvent] = useState(eventOptions[0]);
 	const [ageGroup, setAgeGroup] = useState("");
+	const [sex, setSex] = useState<"M" | "F" | "All">("M");
 	const [rankings, setRankings] = useState<any[]>([]);
 	const [tonbridgeSwimmers, setTonbridgeSwimmers] = useState<any[]>([]);
 	const [swimmer, setSwimmer] = useState("");
@@ -20,11 +24,28 @@ export default function TrackerPage() {
 	async function fetchRankings() {
 		if (!event || !ageGroup) return;
 		setLoading(true);
-		const res = await fetch(`/api/loadData?pool=L&stroke=${eventNameToCode[event]}&sex=M&ageGroup=${ageGroup}&date=31/12/2026`);
-		const data = await res.json();
-		setRankings(data.swimmers || []);
+		let swimmers: any[] = [];
+		if (sex === 'All') {
+			const [mRes, fRes] = await Promise.all([
+				fetch(`/api/loadData?pool=L&stroke=${eventNameToCode[event]}&sex=M&ageGroup=${ageGroup}&date=31/12/2026`),
+				fetch(`/api/loadData?pool=L&stroke=${eventNameToCode[event]}&sex=F&ageGroup=${ageGroup}&date=31/12/2026`)
+			]);
+			const mData = await mRes.json();
+			const fData = await fRes.json();
+			swimmers = [...(mData.swimmers || []), ...(fData.swimmers || [])];
+			// normalize times to seconds for sorting
+			swimmers = swimmers.map((s: any) => ({ ...s, _timeSeconds: typeof s.time === 'number' ? s.time : (typeof s.time === 'string' ? parseTimeString(s.time) : null) }));
+			swimmers.sort((a: any, b: any) => (a._timeSeconds ?? Infinity) - (b._timeSeconds ?? Infinity));
+			// assign rank order and slice to top 50
+			swimmers = swimmers.slice(0, 50).map((s: any, idx: number) => ({ ...s, rank: idx + 1 }));
+		} else {
+			const res = await fetch(`/api/loadData?pool=L&stroke=${eventNameToCode[event]}&sex=${sex}&ageGroup=${ageGroup}&date=31/12/2026`);
+			const data = await res.json();
+			swimmers = data.swimmers || [];
+		}
+		setRankings(swimmers || []);
 		// Filter for Tonbridge swimmers
-		const tonbridge = (data.swimmers || []).filter((r: any) => r.club?.toLowerCase().includes("tonbridge"));
+		const tonbridge = (swimmers || []).filter((r: any) => r.club?.toLowerCase().includes("tonbridge"));
 		setTonbridgeSwimmers(tonbridge);
 		setLoading(false);
 	}
@@ -56,6 +77,22 @@ export default function TrackerPage() {
 		if (event && ageGroup) fetchRankings();
 	}, [event, ageGroup]);
 
+	// Initialize from URL query params if present
+	React.useEffect(() => {
+		try {
+			const params = search;
+			if (!params) return;
+			const qEvent = params.get('event');
+			const qAge = params.get('ageGroup');
+			const qSex = params.get('sex');
+			const qSwimmer = params.get('swimmer');
+			if (qEvent && eventOptions.includes(qEvent)) setEvent(qEvent);
+			if (qAge) setAgeGroup(qAge);
+			if (qSex === 'M' || qSex === 'F' || qSex === 'All') setSex(qSex as any);
+			if (qSwimmer) setSwimmer(qSwimmer);
+		} catch (e) { }
+	}, []);
+
 
 	// Fetch all swimmers' PBs when rankings change
 	React.useEffect(() => {
@@ -72,7 +109,7 @@ export default function TrackerPage() {
 	return (
 		<div className="p-8 max-w-3xl mx-auto">
 			<h1 className="text-2xl font-bold mb-4">TSC National Qualification Tracker</h1>
-			<form className="space-y-4" onSubmit={e => e.preventDefault()}>
+			<form className="space-y-4 card" onSubmit={e => e.preventDefault()}>
 				<div>
 					<label className="block mb-1">Event</label>
 					<select value={event} onChange={e => setEvent(e.target.value)} className="w-full p-2 border rounded bg-gray-900 text-white">
@@ -89,6 +126,14 @@ export default function TrackerPage() {
 					</select>
 				</div>
 				<div>
+					<label className="block mb-1">Sex</label>
+					<select value={sex} onChange={e => setSex(e.target.value as any)} className="w-full p-2 border rounded bg-gray-900 text-white">
+						<option value="M">Male</option>
+						<option value="F">Female</option>
+						<option value="All">Both (M+F)</option>
+					</select>
+				</div>
+				<div>
 					<label className="block mb-1">Swimmer Name (Tonbridge only)</label>
 					<select value={swimmer} onChange={e => setSwimmer(e.target.value)} className="w-full p-2 border rounded bg-gray-900 text-white" disabled={tonbridgeSwimmers.length === 0} required>
 						<option value="">Select swimmer</option>
@@ -98,15 +143,23 @@ export default function TrackerPage() {
 					</select>
 				</div>
 			</form>
-			{loading && <div className="mt-6">Loading...</div>}
+			{loading && (
+				<div className="mt-6 flex items-center space-x-3" role="status" aria-live="polite">
+					<svg className="animate-spin h-6 w-6 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+						<circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+						<path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+					</svg>
+					<div className="text-white">Loading…</div>
+				</div>
+			)}
 			{/* Collapsible panels for Top 50 Rankings and Personal Bests */}
 			<details className="mt-8">
 				<summary className="text-xl font-semibold mb-2 cursor-pointer">Top 50 Rankings</summary>
 				{rankings.length > 0 && (
 					<ul className="space-y-1 mt-2">
-						{rankings.map((r, i) => (
-							<li key={i} className="bg-gray-800 p-2 rounded text-white">{r.rank}. {r.name} ({r.time}) {r.club}</li>
-						))}
+								{rankings.map((r, i) => (
+									<li key={i} className="card">{r.rank}. {r.name} ({r.time}) {r.club}</li>
+								))}
 					</ul>
 				)}
 			</details>
@@ -115,7 +168,7 @@ export default function TrackerPage() {
 				{personalBests.length > 0 && (
 					<ul className="space-y-1 mt-2">
 						{personalBests.map((pb, i) => (
-							<li key={i} className="bg-gray-700 p-2 rounded text-white">{pb.date}: {pb.time} sec ({pb.meet})</li>
+							<li key={i} className="card">{pb.date}: {pb.time} sec ({pb.meet})</li>
 						))}
 					</ul>
 				)}
@@ -128,7 +181,7 @@ export default function TrackerPage() {
 			<div className="mt-8">
 				<h2 className="text-xl font-semibold mb-2">Historical Qualifying Time Graph</h2>
 				{allSwimmersBests.length > 0 && swimmer && ((() => {
-					const { cutoffSeries, trackedSeries } = calculateMonthlyCutoffFromTop50(allSwimmersBests, rankings.map(r => ({ name: r.name, time: r.time })), swimmer);
+					const { cutoffSeries, trackedSeries } = calculateMonthlyCutoffFromTop50(allSwimmersBests, rankings.map(r => ({ name: r.name, time: r.time })), swimmer, ageGroup);
 					// Build debug table data: grouped by month, sorted by time
 					const groupedByMonth: Record<string, { name: string; time: number | null; date: string; meet?: string; rank?: number | null }[]> = {};
 					allSwimmersBests.forEach((swimmerObj: any) => {
@@ -169,8 +222,14 @@ export default function TrackerPage() {
 						<>
 							<MonthlyCutoffGraph cutoffSeries={cutoffSeries} trackedSeries={trackedSeries} />
 
+							{/* Rank over time for selected swimmer (only for this event) */}
+							{swimmer && (() => {
+								const rankSeries = months.map(m => ({ month: m, rank: virtualRanksByMonth[m]?.[swimmer] ?? null }));
+								return <RankGraph data={rankSeries} maxRank={50} />;
+							})()}
+
 							{/* Dashboard: tracked swimmer — KPI summary */}
-							<div className="mt-4 p-4 bg-gradient-to-r from-gray-800 via-gray-700 to-gray-800 rounded-lg text-sm text-white">
+							<div className="mt-4 card text-sm text-white">
 								{(() => {
 									const margins = months.map(m => {
 										const cutoff = cutoffSeries.find(c => c.month === m)?.cutoff ?? null;
@@ -178,6 +237,16 @@ export default function TrackerPage() {
 										if (cutoff == null || tracked == null) return null;
 										return cutoff - tracked;
 									}).filter(v => v != null) as number[];
+									// current rank of tracked swimmer from current rankings
+									const currentRankRaw = rankings.find(r => r.name === swimmer)?.rank ?? null;
+									const currentRank = currentRankRaw != null ? Number(currentRankRaw) : null;
+									const cutoffSize = ageGroup === '13' ? 20 : 40;
+									const rankColorClass = (rank: number | null) => {
+										if (rank == null) return 'text-gray-300';
+										if (rank <= cutoffSize) return 'text-green-400';
+										if (rank <= cutoffSize * 2) return 'text-yellow-300';
+										return 'text-red-400';
+									};
 									const monthsMeeting = margins.filter(m => m > 0).length;
 									const monthsCount = months.length || 1;
 									const bestMargin = margins.length ? Math.max(...margins) : null;
@@ -207,13 +276,18 @@ export default function TrackerPage() {
 												<div className="text-lg font-semibold">{swimmer || 'Tracked swimmer'}</div>
 												<div className="text-xs text-gray-300">Historic vs virtual 20th</div>
 											</div>
-											<div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+											<div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
 												<div className="p-3 bg-gray-800 rounded">
 													<div className="text-sm text-gray-300">Months meeting cutoff</div>
 													<div className="text-2xl font-bold text-green-400">{monthsMeeting}</div>
 													<div className="mt-2 h-2 bg-gray-600 rounded overflow-hidden">
 														<div className="h-full bg-green-500" style={{ width: `${pct}%` }} />
 													</div>
+												</div>
+												<div className="p-3 bg-gray-800 rounded">
+													<div className="text-sm text-gray-300">Current Rank</div>
+													<div className={`text-2xl font-bold ${rankColorClass(currentRank)}`}>{currentRank != null ? (currentRank <= 50 ? currentRank : `>${50}`) : 'n/a'}</div>
+													<div className="text-xs text-gray-400 mt-1">Cutoff size: {cutoffSize}</div>
 												</div>
 												<div className="p-3 bg-gray-800 rounded">
 													<div className="text-sm text-gray-300">Months in virtual top‑20</div>
@@ -293,6 +367,8 @@ export default function TrackerPage() {
 									})}
 								</div>
 							</details>
+							{/* Tonbridge report */}
+							<Report rankings={rankings} allSwimmersBests={allSwimmersBests} ageGroup={ageGroup} />
 						</>
 					);
 				})())}

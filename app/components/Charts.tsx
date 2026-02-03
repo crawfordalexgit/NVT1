@@ -56,3 +56,24 @@ export function LineGraph({ data }: { data: { date: string; time: number | null 
 }
 
 export default { LineGraph };
+
+export function RankGraph({ data, maxRank = 50 }: { data: { month: string; rank: number | null }[]; maxRank?: number }) {
+	// data: array of { month, rank }
+	const merged = data.map(d => ({ month: d.month, rank: d.rank }));
+	const values = merged.map(m => m.rank).filter(v => v != null) as number[];
+	const max = values.length > 0 ? Math.max(...values) : maxRank;
+	const min = 1;
+	return (
+		<div className="chart-outer p-4 rounded-lg bg-gray-900 mt-4">
+			<h3 className="mb-2 text-white">Rank Over Time</h3>
+			<ResponsiveContainer width="100%" height={200}>
+				<LineChart data={merged} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+					<XAxis dataKey="month" stroke="#fff" />
+					<YAxis stroke="#fff" domain={[max + 1, min]} allowDecimals={false} />
+					<Tooltip labelStyle={{ color: "#fff" }} contentStyle={{ background: "#23243a", color: "#fff" }} formatter={(v:any)=>v} />
+					<Line type="monotone" dataKey="rank" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} connectNulls={true} />
+				</LineChart>
+			</ResponsiveContainer>
+		</div>
+	);
+}

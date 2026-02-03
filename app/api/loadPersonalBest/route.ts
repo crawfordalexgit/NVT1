@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { buildPersonalBestUrl } from "@/lib/swimUrls";
 import { parseTimeString } from "@/lib/time";
 import * as cheerio from "cheerio";
+import { getCached, setCached, computeCacheKey } from "@/lib/cache";
 
 export async function GET(req: NextRequest) {
 	const params = Object.fromEntries(req.nextUrl.searchParams) as Record<string, string>;
@@ -12,6 +13,9 @@ export async function GET(req: NextRequest) {
 	const tiref = params.tiref ?? '';
 	const date = params.date ?? '';
 	const url = buildPersonalBestUrl({ pool: poolParam as "L" | "S", stroke: strokeNum, sex: sexParam, ageGroup, tiref, date });
+	const cacheKey = computeCacheKey({ route: 'personalBest', pool: poolParam, stroke: strokeNum, sex: sexParam, ageGroup, tiref, date });
+	const cached = await getCached(cacheKey);
+	if (cached) return Response.json(cached);
 	const res = await fetch(url);
 	if (!res.ok) return Response.json({ error: "Failed to fetch personal bests" }, { status: 500 });
 	const html = await res.text();
@@ -29,5 +33,7 @@ export async function GET(req: NextRequest) {
 			level: cells.eq(7).text().trim()
 		};
 	}).get();
-	return Response.json({ data });
+	const payload = { data, url };
+	try { await setCached(cacheKey, payload, 60 * 60 * 24 * 7); } catch (e) {}
+	return Response.json(payload);
 }
