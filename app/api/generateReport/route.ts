@@ -1,9 +1,10 @@
 import { NextRequest } from "next/server";
 import { getCached, setCached, computeCacheKey } from '@/lib/cache';
 import { eventNameToCode } from "@/utils/eventNameToCode";
+import { parseDateString } from '@/lib/time';
 import fs from 'fs';
 import path from 'path';
-import { insertSnapshotRun, upsertSnapshotEntries } from '@/lib/supabaseServer';
+import { insertSnapshotRun, upsertSnapshotEntries, upsertSwimmerPersonalBests } from '@/lib/supabaseServer';
 
 async function sleep(ms: number) { return new Promise(res => setTimeout(res, ms)); }
 
@@ -119,10 +120,13 @@ export async function GET(req: NextRequest) {
     for (const r of latestOnly) {
         const key = r.name + '|' + (r.tiref || '');
         if (!byName[key]) {
-            byName[key] = { name: r.name, tiref: r.tiref, club: r.club, appearances: [], best: null };
+            byName[key] = { name: r.name, tiref: r.tiref, club: r.club, appearances: [], best: null, personalBests: [] };
         }
         byName[key].appearances.push({ event: r.event, age: r.age, sex: r.sex, rank: r.rank, time: r.time, date: r.date });
-        // find best time from personalBests
+        // merge personalBests arrays so we can persist them later
+        if (r.personalBests && Array.isArray(r.personalBests) && r.personalBests.length) {
+            byName[key].personalBests.push(...r.personalBests);
+        }
         const times = (r.personalBests || []).map((p: any) => p.time).filter((t: any) => t != null && !isNaN(t));
         if (times.length) {
             const best = Math.min(...times);
@@ -132,7 +136,9 @@ export async function GET(req: NextRequest) {
 
     const out = Object.values(byName).map((v: any) => ({ ...v, best: v.best }));
 
-    const payload = { generatedAt: new Date().toISOString(), count: out.length, swimmers: out, internalUrls: calledInternal, externalUrls: Array.from(checkedExternal), debugSamples, snapshots };
+    // compute how many entries would be persisted from snapshotsAll
+    const entriesToPersist = Object.values(snapshotsAll).reduce((acc, list) => acc + ((list && list.length) || 0), 0);
+    const payload = { generatedAt: new Date().toISOString(), count: out.length, swimmers: out, internalUrls: calledInternal, externalUrls: Array.from(checkedExternal), debugSamples, snapshots, entriesToPersist };
     try {
         // cache for 24 hours by default
         await setCached('fullReport', payload, 24 * 60 * 60);
@@ -155,7 +161,29 @@ export async function GET(req: NextRequest) {
                         entries.push({ key: keyNoDate, tiref: s.tiref ?? null, name: s.name ?? null, club: s.club ?? null, rank: s.rank ?? null, time: s.time ?? null, payload: s });
                     }
                 }
+                console.log(`Persisting ${entries.length} snapshot_entries for run ${inserted.run_id}`);
                 if (entries.length) await upsertSnapshotEntries(inserted.run_id, entries);
+                // persist personal bests: store each collected personal best (if any) with its original pb_date when available
+                try {
+                    const pbRows: any[] = [];
+                    for (const s of out || []) {
+                        const pbsList = (s.personalBests || []);
+                        for (const pb of pbsList) {
+                            // pb.date expected like 'DD/MM/YY' or 'DD/MM/YYYY'
+                            const d = parseDateString(String(pb.date || ''));
+                            const pbDate = d ? d.toISOString().slice(0,10) : runIso; // fallback to runIso
+                            const timeVal = (pb.time == null) ? null : (typeof pb.time === 'number' ? pb.time : Number(pb.time));
+                            if (timeVal == null || isNaN(timeVal)) continue;
+                            pbRows.push({ tiref: s.tiref ?? null, name: s.name ?? null, time: timeVal, meet: pb.meet ?? null, payload: pb, pb_date: pbDate });
+                        }
+                    }
+                    if (pbRows.length) {
+                        console.log(`Persisting ${pbRows.length} swimmer personal bests for run ${inserted.run_id}`);
+                        await upsertSwimmerPersonalBests(inserted.run_id, runIso, pbRows);
+                    }
+                } catch (pbErr) {
+                    console.error('Failed to persist swimmer_personal_bests:', String(pbErr));
+                }
             } catch (dbErr) {
                 // on DB failure, fall back to writing file
                 console.error('Supabase write failed, falling back to filesystem:', String(dbErr));
