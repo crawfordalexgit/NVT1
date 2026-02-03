@@ -14,8 +14,26 @@ export async function GET(req: NextRequest) {
 	const cacheKey = computeCacheKey({ route: 'rankings', pool: poolParam, stroke: strokeNum, sex: sexParam, ageGroup, date });
 	const cached = await getCached(cacheKey);
 	if (cached) return Response.json(cached);
-	const res = await fetch(url);
-	if (!res.ok) return Response.json({ error: "Failed to fetch rankings", url }, { status: 500 });
+	// use browser-like headers to reduce chance of remote blocking
+	const fetchOptions: RequestInit = {
+		headers: {
+			'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+			'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+			'Accept-Language': 'en-GB,en;q=0.9',
+			'Referer': url
+		}
+	};
+	let res: Response;
+	try {
+		res = await fetch(url, fetchOptions);
+	} catch (e: any) {
+		const errText = String(e?.message || e);
+		return Response.json({ ok: false, error: 'Fetch failed', message: errText, url }, { status: 200 });
+	}
+	if (!res.ok) {
+		const txt = await res.text().catch(() => '');
+		return Response.json({ ok: false, status: res.status, statusText: res.statusText, text: txt.slice(0, 4000), url }, { status: 200 });
+	}
 	const html = await res.text();
 	const $ = cheerio.load(html);
 	const table = $("#rankTable");
