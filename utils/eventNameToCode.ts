@@ -15,6 +15,5 @@ export const eventNameToCode: Record<string, number> = {
   "100 Back": 14,
   "200 Back": 15,
   "200 IM": 16,
-  "400 IM": 17,
-  "100 IM": 18
+  "400 IM": 17
 };

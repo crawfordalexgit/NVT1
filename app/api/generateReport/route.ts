@@ -1,6 +1,9 @@
 import { NextRequest } from "next/server";
 import { getCached, setCached, computeCacheKey } from '@/lib/cache';
 import { eventNameToCode } from "@/utils/eventNameToCode";
+import fs from 'fs';
+import path from 'path';
+import { insertSnapshotRun, upsertSnapshotEntries } from '@/lib/supabaseServer';
 
 async function sleep(ms: number) { return new Promise(res => setTimeout(res, ms)); }
 
@@ -15,12 +18,15 @@ export async function GET(req: NextRequest) {
     const calledInternal: string[] = [];
     const debugSamples: Record<string, any> = {};
     const snapshots: Record<string, any[]> = {};
+    const snapshotsAll: Record<string, any[]> = {};
 
     function yearEndDateString() {
         const now = new Date();
         const yyyy = String(now.getFullYear());
         return `31/12/${yyyy}`;
     }
+
+    const runIso = new Date().toISOString().slice(0,10); // YYYY-MM-DD for this run
 
     for (const ev of events) {
         const stroke = eventNameToCode[ev];
@@ -60,6 +66,9 @@ export async function GET(req: NextRequest) {
                         const tonbridge = swimmers.filter((s: any) => (s.club || '').toLowerCase().includes('tonbridge'));
                         const snapKey = `${ev}|${age}|${sex}|${dateStr}`;
                         snapshots[snapKey] = tonbridge;
+                        // store the full rankings for this run (keyed without the date)
+                        const keyNoDate = `${ev}|${age}|${sex}`;
+                        snapshotsAll[keyNoDate] = (swimmers || []).map((s: any) => ({ name: s.name, tiref: s.tiref, rank: s.rank, time: s.time })).slice(0, 200);
                         for (const t of tonbridge) {
                             let pbs: any[] = [];
                             if (t.tiref) {
@@ -129,6 +138,42 @@ export async function GET(req: NextRequest) {
         await setCached('fullReport', payload, 24 * 60 * 60);
     } catch (e) {
         // ignore cache errors
+    }
+
+    // persist ranking snapshot for this run: prefer Supabase, fallback to .cache filesystem
+    try {
+        if (process.env.USE_SUPABASE === 'true') {
+            const run = { run_iso: runIso, generated_at: new Date().toISOString(), meta: { source: 'generateReport' } };
+            try {
+                const inserted = await insertSnapshotRun(run);
+                const runId = inserted.run_id;
+                // build entries from snapshotsAll (keyNoDate -> swimmers[])
+                const entries: any[] = [];
+                for (const keyNoDate of Object.keys(snapshotsAll)) {
+                    const list = snapshotsAll[keyNoDate] || [];
+                    for (const s of list) {
+                        entries.push({ key: keyNoDate, tiref: s.tiref ?? null, name: s.name ?? null, club: s.club ?? null, rank: s.rank ?? null, time: s.time ?? null, payload: s });
+                    }
+                }
+                if (entries.length) await upsertSnapshotEntries(inserted.run_id, entries);
+            } catch (dbErr) {
+                // on DB failure, fall back to writing file
+                console.error('Supabase write failed, falling back to filesystem:', String(dbErr));
+                const snapDir = path.join(process.cwd(), '.cache', 'rankingSnapshots');
+                fs.mkdirSync(snapDir, { recursive: true });
+                const outSnap = { generatedAt: new Date().toISOString(), runIso, snapshots: snapshotsAll };
+                const file = path.join(snapDir, `${runIso}.json`);
+                try { fs.writeFileSync(file, JSON.stringify(outSnap), { encoding: 'utf8' }); } catch (e) {}
+            }
+        } else {
+            const snapDir = path.join(process.cwd(), '.cache', 'rankingSnapshots');
+            fs.mkdirSync(snapDir, { recursive: true });
+            const outSnap = { generatedAt: new Date().toISOString(), runIso, snapshots: snapshotsAll };
+            const file = path.join(snapDir, `${runIso}.json`);
+            try { fs.writeFileSync(file, JSON.stringify(outSnap), { encoding: 'utf8' }); } catch (e) {}
+        }
+    } catch (e) {
+        // last-resort ignore
     }
 
     return Response.json(payload);

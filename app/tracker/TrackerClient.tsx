@@ -4,7 +4,7 @@ import { useSearchParams } from 'next/navigation';
 import { eventNameToCode } from "@/utils/eventNameToCode";
 import { LineGraph, MonthlyCutoffGraph, RankGraph } from "@/app/components/Charts";
 import Report from "@/app/components/Report";
-import { calculateMonthlyCutoff, calculateMonthlyCutoffFromTop50, parseTimeString, formatTimeValue, getMonthKey } from "@/lib/time";
+import { calculateMonthlyCutoffFromTop50, parseTimeString, formatTimeValue } from "@/lib/time";
 
 const eventOptions = Object.keys(eventNameToCode);
 
@@ -19,6 +19,7 @@ export default function TrackerClient() {
     const [personalBests, setPersonalBests] = useState<any[]>([]);
     const [allSwimmersBests, setAllSwimmersBests] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
+    const [rankTrend, setRankTrend] = useState<{date:string,rank:number|null,time?:any}[]>([]);
 
     async function fetchRankings() {
         if (!event || !ageGroup) return;
@@ -94,6 +95,88 @@ export default function TrackerClient() {
         setPersonalBests(tracked?.data || []);
     }, [allSwimmersBests, swimmer]);
 
+    React.useEffect(() => {
+        async function loadTrend() {
+            if (!swimmer || !event || !ageGroup || !sex) return setRankTrend([]);
+            try {
+                const q = new URLSearchParams({ name: swimmer, event, age: String(ageGroup), sex, limit: '12' });
+                const res = await fetch(`/api/rankingTrend?${q.toString()}`);
+                if (!res.ok) return setRankTrend([]);
+                const j = await res.json();
+                setRankTrend(j.data || []);
+            } catch (e) {
+                setRankTrend([]);
+            }
+        }
+        loadTrend();
+    }, [swimmer, event, ageGroup, sex]);
+
+    const trendKPIs = React.useMemo(() => {
+        try {
+            if (!rankTrend || rankTrend.length === 0) return null;
+            const valid = rankTrend.filter(r => r.rank != null).map((r,i)=>({i,rank:r.rank!}));
+            if (valid.length < 2) return { netChange: null, slope: null, runs: valid.length };
+            // net change: previous-first to latest (positive = improved)
+            const first = valid[0].rank;
+            const last = valid[valid.length-1].rank;
+            const netChange = (first as number) - (last as number);
+
+            // simple linear regression slope (rank vs index)
+            const n = valid.length;
+            const xs = valid.map(v=>v.i);
+            const ys = valid.map(v=>v.rank);
+            const meanX = xs.reduce((a,b)=>a+b,0)/n;
+            const meanY = ys.reduce((a,b)=>a+b,0)/n;
+            let num = 0; let den = 0;
+            for (let k=0;k<n;k++) { num += (xs[k]-meanX)*(ys[k]-meanY); den += (xs[k]-meanX)*(xs[k]-meanX); }
+            const slope = den === 0 ? 0 : num/den; // ranks per run (negative = improving)
+            return { netChange, slope, runs: n };
+        } catch (e) { return null; }
+    }, [rankTrend]);
+
+    const computed = React.useMemo(() => {
+        try {
+            if (!allSwimmersBests || allSwimmersBests.length === 0) return { cutoffSeries: [], trackedSeries: [], kpis: null };
+            const swimmersForCutoff = allSwimmersBests.map((s: any) => ({ name: s.name, data: s.data || [] }));
+            const { cutoffSeries, trackedSeries } = calculateMonthlyCutoffFromTop50(swimmersForCutoff, rankings, swimmer || undefined, ageGroup || '13', 12);
+
+            // KPIs
+            let monthsMeeting = 0;
+            let virtualCount = 0;
+            let sumMargins = 0;
+            let marginCount = 0;
+            let monthsRecorded = 0;
+            for (let i = 0; i < cutoffSeries.length; i++) {
+                const c = cutoffSeries[i];
+                const t = trackedSeries[i];
+                if (c && c.cutoff != null && t && t.time != null) {
+                    monthsRecorded++;
+                    const margin = c.cutoff - t.time; // positive means swimmer is faster than cutoff
+                    if (!isNaN(margin)) {
+                        sumMargins += margin;
+                        marginCount++;
+                    }
+                    if (t.time <= c.cutoff) monthsMeeting++;
+                }
+                if (c && c.reason && String(c.reason).startsWith('virtual')) virtualCount++;
+            }
+            const avgMargin = marginCount > 0 ? (sumMargins / marginCount) : null;
+            const latestMargin = (() => {
+                if (cutoffSeries.length === 0) return null;
+                const lastIdx = cutoffSeries.length - 1;
+                const c = cutoffSeries[lastIdx];
+                const t = trackedSeries[lastIdx];
+                if (!c || c.cutoff == null || !t || t.time == null) return null;
+                return c.cutoff - t.time;
+            })();
+
+            const monthsShown = cutoffSeries.length;
+            return { cutoffSeries, trackedSeries, kpis: { monthsMeeting, virtualCount, avgMargin, latestMargin, monthsShown, monthsRecorded } };
+        } catch (e) {
+            return { cutoffSeries: [], trackedSeries: [], kpis: null };
+        }
+    }, [allSwimmersBests, rankings, swimmer, ageGroup]);
+
     return (
         <div className="p-8 max-w-3xl mx-auto">
             <h1 className="text-2xl font-bold mb-4">TSC National Qualification Tracker</h1>
@@ -141,6 +224,59 @@ export default function TrackerClient() {
                 </div>
             )}
 
+            {/* KPIs + Graph: placed immediately under filters as requested */}
+            <div className="mt-8">
+                <h2 className="text-xl font-semibold mb-2">Historical Qualifying Time Graph</h2>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+                    <div className="card p-4 btn-accent">
+                        <div className="text-sm text-gray-800">Rank Trend</div>
+                        <div className="text-2xl font-bold">
+                            {trendKPIs ? (
+                                trendKPIs.netChange == null ? '--' : (() => {
+                                    const arrow = trendKPIs.netChange > 0 ? '▲' : (trendKPIs.netChange < 0 ? '▼' : '—');
+                                    const sign = trendKPIs.netChange > 0 ? '+' : (trendKPIs.netChange < 0 ? '' : '');
+                                    const latestRank = rankTrend.filter(r=>r.rank!=null).slice(-1)[0]?.rank ?? null;
+                                    return `${arrow} ${sign}${Math.abs(trendKPIs.netChange)} (${latestRank ? '#'+latestRank : 'n/a'})`;
+                                })()
+                            ) : '--'}
+                        </div>
+                        <div className="text-xs text-gray-300 mt-1">{trendKPIs ? `slope ${trendKPIs.slope ? trendKPIs.slope.toFixed(2) : '0.00'} ranks/run over ${trendKPIs.runs} runs` : ''}</div>
+                    </div>
+                    <div className="card p-4 btn-accent">
+                        <div className="text-sm text-gray-800">Avg Margin</div>
+                        <div className="text-2xl font-bold">{computed.kpis ? (computed.kpis.avgMargin == null ? '--' : (computed.kpis.avgMargin >= 0 ? '+' : '-') + formatTimeValue(Math.abs(computed.kpis.avgMargin))) : "--"}</div>
+                    </div>
+                    <div className="card p-4 btn-accent">
+                        <div className="text-sm text-gray-800">Latest Margin</div>
+                        <div className="text-2xl font-bold">{computed.kpis ? (computed.kpis.latestMargin == null ? '--' : (computed.kpis.latestMargin >= 0 ? '+' : '-') + formatTimeValue(Math.abs(computed.kpis.latestMargin))) : "--"}</div>
+                    </div>
+                    
+                </div>
+
+                {/* Graph */}
+                {computed && computed.cutoffSeries && computed.cutoffSeries.length > 0 && (
+                    (() => {
+                        const hasCutoffs = (computed.cutoffSeries || []).some((c: any) => c.cutoff != null);
+                        return hasCutoffs ? (
+                            <div>
+                                <MonthlyCutoffGraph cutoffSeries={computed.cutoffSeries} trackedSeries={computed.trackedSeries} />
+                                {/* Rank trend chart */}
+                                {rankTrend && rankTrend.length > 0 && (
+                                    <div className="mt-4">
+                                        <RankGraph data={rankTrend.map(r => ({ month: r.date, rank: r.rank }))} />
+                                    </div>
+                                )}
+                            </div>
+                        ) : (
+                            <div className="mt-4 text-sm text-gray-300">No historical cutoff data available for the selected event/age yet.</div>
+                        );
+                    })()
+                )}
+                <div className="mt-4">
+                    <Report rankings={rankings} allSwimmersBests={allSwimmersBests} ageGroup={ageGroup} />
+                </div>
+            </div>
+
             <details className="mt-8">
                 <summary className="text-xl font-semibold mb-2 cursor-pointer">Top 50 Rankings</summary>
                 {rankings.length > 0 && (
@@ -166,10 +302,7 @@ export default function TrackerClient() {
                 </div>
             </details>
 
-            <div className="mt-8">
-                <h2 className="text-xl font-semibold mb-2">Historical Qualifying Time Graph</h2>
-                <Report rankings={rankings} allSwimmersBests={allSwimmersBests} ageGroup={ageGroup} />
-            </div>
+            
         </div>
     );
 }
