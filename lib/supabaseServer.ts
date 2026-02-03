@@ -101,7 +101,7 @@ export async function upsertSnapshotEntries(runId: string, entries: SnapshotEntr
       }));
 
       // Use insert with graceful handling of duplicate-key conflicts (unique index uses expression)
-      const { error } = await supabase.from('snapshot_entries').insert(cleanedBatch, { returning: 'minimal' });
+      const { error } = await supabase.from('snapshot_entries').insert(cleanedBatch);
       if (error) {
         // If it's a duplicate-key error, log and continue; otherwise propagate
         const serialized = util.inspect(error, { depth: 3 });
@@ -154,7 +154,7 @@ export async function upsertSwimmerPersonalBests(runId: string, runIso: string, 
     payload: p.payload || {}
   }));
 
-  const { error } = await supabase.from('swimmer_personal_bests').upsert(rows, { onConflict: 'tiref,pb_date,time', returning: 'minimal' });
+  const { error } = await supabase.from('swimmer_personal_bests').upsert(rows, { onConflict: 'tiref,pb_date,time' });
   if (error) throw error;
   return { inserted: rows.length };
 }
