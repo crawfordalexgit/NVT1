@@ -35,7 +35,7 @@ export function buildRankingsUrl({
 		TargetCounty: county,
 		TargetClub: club
 	});
-	return `https://www.swimmingresults.org/12months/last12.php?${params.toString()}`;
+	return maybeAppendVercelBypass(`https://www.swimmingresults.org/12months/last12.php?${params.toString()}`);
 }
 
 export function buildPersonalBestUrl({
@@ -82,5 +82,18 @@ export function buildPersonalBestUrl({
 		tstroke: stroke.toString(),
 		tcourse: pool
 	});
-	return `https://www.swimmingresults.org/individualbest/personal_best_time_date.php?${params.toString()}`;
+	return maybeAppendVercelBypass(`https://www.swimmingresults.org/individualbest/personal_best_time_date.php?${params.toString()}`);
+}
+
+function maybeAppendVercelBypass(url: string) {
+	try {
+		const bypass = process.env.VPROTECTION_BYPASS || process.env.VERCEL_PROTECTION_BYPASS;
+		if (!bypass) return url;
+		const u = new URL(url);
+		u.searchParams.set('x-vercel-set-bypass-cookie', 'true');
+		u.searchParams.set('x-vercel-protection-bypass', String(bypass));
+		return u.toString();
+	} catch (e) {
+		return url;
+	}
 }

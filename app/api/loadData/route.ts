@@ -32,7 +32,14 @@ export async function GET(req: NextRequest) {
 	}
 	if (!res.ok) {
 		const txt = await res.text().catch(() => '');
-		return Response.json({ ok: false, status: res.status, statusText: res.statusText, text: txt.slice(0, 4000), url }, { status: 200 });
+		// detect Vercel deployment-protection HTML and surface guidance
+		const isVercelAuth = typeof txt === 'string' && txt.includes('Vercel Authentication') || txt.includes('Authentication Required') || txt.includes('x-vercel-protection-bypass');
+		const debug: Record<string, any> = { ok: false, status: res.status, statusText: res.statusText, text: txt.slice(0, 4000), url };
+		if (isVercelAuth) {
+			debug.vercelAuth = true;
+			debug.hint = 'Target site requires Vercel deployment authentication. Provide a bypass token or use vercel curl / MCP as described in the returned HTML.';
+		}
+		return Response.json(debug, { status: 200 });
 	}
 	const html = await res.text();
 	const $ = cheerio.load(html);
