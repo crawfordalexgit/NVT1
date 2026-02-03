@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
 		// add more if needed
 	};
 
-	function readCell(cells: cheerio.Cheerio<cheerio.Element>, idx: number) {
+	function readCell(cells: cheerio.Cheerio<any>, idx: number) {
 		if (typeof idx !== 'number' || idx < 0) return '';
 		return cells.eq(idx).text().trim();
 	}
