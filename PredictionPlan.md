@@ -1,0 +1,32 @@
+#/plan Create a new prediction feature for my Python app that uses the existing database data first and only prompts the user for missing fields.
+
+Requirements:
+- Build a module called prediction_page.py.
+- Load all available swimmer data from the existing database layer:
+    - race history
+    - stroke count
+    - tempo
+    - stroke type
+- Detect which fields are missing for the prediction model.
+- Only prompt the user for missing data (do NOT ask for data already in the database).
+- Build a generic prediction model using XGBoost (XGBRegressor).
+- Inputs to the model:
+    - race_times
+    - stroke_counts
+    - tempos
+    - stroke (categorical)
+    - comparison_dataset (top 50 swimmers)
+- Outputs:
+    - predicted future time
+    - predicted time drop
+    - confidence interval
+- Integrate with the existing data-access functions in the project.
+- Create helper functions:
+    - load_existing_data()
+    - find_missing_fields()
+    - request_missing_data()
+    - preprocess_data()
+    - train_model()
+    - predict_future_time()
+- Ensure the feature works for ANY stroke and distance
+-Create a menu item on the website on the left hand side to run this

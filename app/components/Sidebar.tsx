@@ -32,6 +32,7 @@ export default function Sidebar() {
       <nav className="space-y-2">
         <Link href="/tracker" className="sidebar-link">Tracker</Link>
         <Link href="/report" className="sidebar-link">Report</Link>
+        <Link href="/virtual" className="sidebar-link">Virtual Rankings</Link>
         <button onClick={clearCache} className="w-full text-left sidebar-link" style={{ color: '#ffb4b4' }}>Clear Cache</button>
       </nav>
     </aside>

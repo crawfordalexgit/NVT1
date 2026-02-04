@@ -3,6 +3,8 @@ import { buildPersonalBestUrl } from "@/lib/swimUrls";
 import { parseTimeString } from "@/lib/time";
 import * as cheerio from "cheerio";
 import { getCached, setCached, computeCacheKey } from "@/lib/cache";
+import { getSwimmerPersonalBests } from '@/lib/supabaseServer';
+import { eventNameToCode } from '@/utils/eventNameToCode';
 
 export async function GET(req: NextRequest) {
 	const params = Object.fromEntries(req.nextUrl.searchParams) as Record<string, string>;
@@ -12,10 +14,29 @@ export async function GET(req: NextRequest) {
 	const ageGroup = params.ageGroup ?? '';
 	const tiref = params.tiref ?? '';
 	const date = params.date ?? '';
-	const url = buildPersonalBestUrl({ pool: poolParam as "L" | "S", stroke: strokeNum, sex: sexParam, ageGroup, tiref, date });
+	const force = params.force === '1' || params.force === 'true';
+	const url = buildPersonalBestUrl({ pool: poolParam as "L" | "S", stroke: strokeNum, sex: sexParam, ageGroup, tiref, date, fullHistory: true });
 	const cacheKey = computeCacheKey({ route: 'personalBest', pool: poolParam, stroke: strokeNum, sex: sexParam, ageGroup, tiref, date });
 	const cached = await getCached(cacheKey);
-	if (cached) return Response.json(cached);
+	if (!force && cached) return Response.json(cached);
+
+	// If DB is enabled and not forcing a refresh, try DB-first lookup by tiref
+	if (!force && process.env.USE_SUPABASE === 'true' && tiref) {
+		try {
+			const rows = await getSwimmerPersonalBests(tiref, 50);
+			if (rows && rows.length) {
+				// map to existing API shape
+				// derive event name from stroke param if row.event missing
+				const strokeToName = (snum: number) => Object.entries(eventNameToCode).find(([,v]) => v === snum)?.[0] || null;
+				const data = rows.map(r => ({ time: r.time, date: (r.pb_date ? new Date(r.pb_date).toLocaleDateString('en-GB') : null), meet: r.meet, payload: r.payload, event: r.event ?? strokeToName(strokeNum) }));
+				const payload = { data, url: 'db' };
+				try { await setCached(cacheKey, payload, 60 * 60 * 24 * 7); } catch (e) {}
+				return Response.json(payload);
+			}
+		} catch (e) {
+			// ignore DB errors and fall back to scraping
+		}
+	}
 	const fetchOptions: RequestInit = {
 		headers: {
 			'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -53,7 +74,8 @@ export async function GET(req: NextRequest) {
 			date: cells.eq(3).text().trim(),
 			meet: cells.eq(4).text().trim(),
 			venue: cells.eq(5).text().trim(),
-			level: cells.eq(7).text().trim()
+			level: cells.eq(7).text().trim(),
+			event: Object.entries(eventNameToCode).find(([,v]) => v === strokeNum)?.[0] || null
 		};
 	}).get();
 	const payload = { data, url };

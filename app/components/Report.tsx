@@ -28,6 +28,7 @@ export default function Report({ rankings = [], allSwimmersBests = [], ageGroup 
             tiref: r.tiref,
             best,
             latestTime: latest ? (typeof latest.time === 'number' ? latest.time : (typeof latest.time === 'string' ? parseTimeString(latest.time) : null)) : null,
+            latestLevel: latest ? (latest.level ?? (latest.payload && latest.payload.level) ?? null) : null,
             entries: data.length
         };
     });
@@ -41,6 +42,7 @@ export default function Report({ rankings = [], allSwimmersBests = [], ageGroup 
                         <tr className="text-left text-gray-300">
                             <th className="p-2">Rank</th>
                             <th className="p-2">Name</th>
+                            <th className="p-2">Level</th>
                             <th className="p-2">Best Seen</th>
                             <th className="p-2">Latest Time</th>
                             <th className="p-2">Entries</th>
@@ -52,6 +54,7 @@ export default function Report({ rankings = [], allSwimmersBests = [], ageGroup 
                             <tr key={i} className="border-t border-gray-800">
                                 <td className="p-2 text-white">{row.rank ?? '-'}</td>
                                 <td className="p-2 text-white">{row.name}</td>
+                                    <td className="p-2 text-white">{row.latestLevel ?? '-'}</td>
                                 <td className="p-2 text-white">{row.best != null ? formatTimeValue(row.best) : 'n/a'}</td>
                                 <td className="p-2 text-white">{row.latestTime != null ? formatTimeValue(row.latestTime) : 'n/a'}</td>
                                 <td className="p-2 text-white">{row.entries}</td>

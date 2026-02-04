@@ -52,6 +52,7 @@ export async function GET(req: NextRequest) {
 		time: headers.findIndex(h => /time|result/.test(h)),
 		date: headers.findIndex(h => /date/.test(h)),
 		club: headers.findIndex(h => /club|team/.test(h)),
+        yob: headers.findIndex(h => /yob|year of birth|born/.test(h)),
 		// add more if needed
 	};
 
@@ -65,6 +66,28 @@ export async function GET(req: NextRequest) {
 		const nameCell = cells.eq(colIdx.name >= 0 ? colIdx.name : 0);
 		const tirefMatch = nameCell.find("a[href*='tiref']").attr("href")?.match(/tiref=(\d+)/);
 		let clubVal = readCell(cells, colIdx.club);
+
+		// parse yob if present
+		let yobVal: number | null = null;
+		if (typeof colIdx.yob === 'number' && colIdx.yob >= 0) {
+			const raw = readCell(cells, colIdx.yob);
+			if (raw && raw.length > 0) {
+				// Match either 4-digit year or 2-digit year like '09' meaning 2009
+				const m = raw.match(/(\d{2,4})/);
+				if (m) {
+					const val = m[1];
+					if (val.length === 4) {
+						yobVal = Number(val);
+					} else if (val.length === 2) {
+						const two = Number(val);
+						const now = new Date();
+						const cur2 = Number(String(now.getFullYear()).slice(-2));
+						// if two-digit <= current 2-digit year, assume 2000+two, else 1900+two
+						yobVal = two <= cur2 ? 2000 + two : 1900 + two;
+					}
+				}
+			}
+		}
 		// heuristic: if club not found in detected column, scan the whole row text for 'tonbridge' or similar
 		if ((!clubVal || clubVal.length === 0) && $(row).text().toLowerCase().includes('tonbridge')) {
 			clubVal = 'Tonbridge';
@@ -75,6 +98,7 @@ export async function GET(req: NextRequest) {
 			time: readCell(cells, colIdx.time),
 			date: readCell(cells, colIdx.date),
 			club: clubVal,
+			yob: yobVal,
 			tiref: tirefMatch ? tirefMatch[1] : null
 		};
 	}).get();

@@ -17,8 +17,9 @@ export async function GET(req: NextRequest) {
             const rows = await queryRankingTrend(name, Math.max(limit, 12));
             return Response.json({ data: rows });
         } catch (e) {
-            console.error('Supabase queryRankingTrend failed, falling back to filesystem:', String(e));
-            // fallback to filesystem below
+            // When Supabase is enabled we do not fall back to local filesystem snapshots.
+            console.error('Supabase queryRankingTrend failed; skipping filesystem fallback (USE_SUPABASE=true):', String(e));
+            return Response.json({ data: [] });
         }
     }
 

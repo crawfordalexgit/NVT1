@@ -7,7 +7,7 @@ export default function ReportPage() {
     const [running, setRunning] = useState(false);
     const [progress, setProgress] = useState('');
     const [result, setResult] = useState<any>(null);
-    const [showDebug, setShowDebug] = useState(false);
+    const [showDebug, setShowDebug] = useState(true);
 
     async function runReport() {
         setRunning(true);

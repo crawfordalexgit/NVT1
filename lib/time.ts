@@ -3,9 +3,10 @@
 // trackedName: string (swimmer name)
 // rankings: array of { name, time } from current rankings (used to determine floor)
 export function calculateMonthlyCutoff(
-	swimmers: { name: string; rank?: number; data: { date: string; time: number | null | string }[] }[],
+	swimmers: { name: string; rank?: number; data: { date: string; time: number | null | string; level?: string; payload?: any }[] }[],
 	trackedName: string,
-	rankings: { name: string; time: number | string }[]
+	rankings: { name: string; time: number | string }[],
+	levelFilter?: string
 ): {
 	cutoffSeries: { month: string; cutoff: number | null; reason?: string }[];
 	trackedSeries: { month: string; time: number | null }[];
@@ -14,6 +15,11 @@ export function calculateMonthlyCutoff(
 	const groupedByMonth: Record<string, { name: string; time: number | null; date: string }[]> = {};
 	swimmers.forEach(swimmer => {
 		swimmer.data.forEach(pb => {
+			// if a levelFilter is provided, skip PBs that don't explicitly match
+			const itemLevel = (pb as any).level || (pb as any).payload?.level || null;
+			if (levelFilter && levelFilter !== 'All') {
+				if (!itemLevel || String(itemLevel) !== String(levelFilter)) return;
+			}
 			const month = getMonthKey(pb.date);
 			if (!month) return;
 			if (!groupedByMonth[month]) groupedByMonth[month] = [];
@@ -149,12 +155,19 @@ export function calculateMonthlyCutoffFromTop50(
 	rankings: { name: string; time: number | string }[],
 	trackedName?: string,
 	ageGroup: string = '13',
-	monthsToShow = 12
+	monthsToShow = 18,
+	startMonth?: string,
+	endMonth?: string,
+	levelFilter?: string
 ): { cutoffSeries: { month: string; cutoff: number | null; reason?: string }[]; trackedSeries: { month: string; time: number | null }[] } {
 	// group swims by month
 	const groupedByMonth: Record<string, { name: string; time: number | null; date: string; meet?: string }[]> = {};
 	swimmers.forEach(sw => {
 		sw.data.forEach(pb => {
+			const itemLevel = (pb as any).level || (pb as any).payload?.level || null;
+			if (levelFilter && levelFilter !== 'All') {
+				if (!itemLevel || String(itemLevel) !== String(levelFilter)) return;
+			}
 			const m = getMonthKey(pb.date);
 			if (!m) return;
 			if (!groupedByMonth[m]) groupedByMonth[m] = [];
@@ -162,8 +175,25 @@ export function calculateMonthlyCutoffFromTop50(
 		});
 	});
 	let months = Object.keys(groupedByMonth).sort();
-	// limit to last N months
-	if (months.length > monthsToShow) months = months.slice(months.length - monthsToShow);
+
+	// If start/end month provided, build an inclusive month range and intersect
+	if (startMonth && endMonth) {
+		const range: string[] = [];
+		const [sY, sM] = startMonth.split('-').map(Number);
+		const [eY, eM] = endMonth.split('-').map(Number);
+		if (!isNaN(sY) && !isNaN(sM) && !isNaN(eY) && !isNaN(eM)) {
+			let y = sY, m = sM;
+			while (y < eY || (y === eY && m <= eM)) {
+				range.push(`${y.toString().padStart(4,'0')}-${m.toString().padStart(2,'0')}`);
+				m++;
+				if (m > 12) { m = 1; y++; }
+			}
+		}
+		months = months.filter(m => range.includes(m));
+	} else {
+		// limit to last N months
+		if (months.length > monthsToShow) months = months.slice(months.length - monthsToShow);
+	}
 
 	// determine cutoff size: 20 only for 13 year olds; 40 for age 14+
 	const cutoffSize = ageGroup === '13' ? 20 : 40;
@@ -182,6 +212,11 @@ export function calculateMonthlyCutoffFromTop50(
 				.map(pb => {
 					const m = getMonthKey(pb.date);
 					if (!m) return null;
+					// enforce level filter when computing cumulative bests
+					const itemLevel = (pb as any).level || (pb as any).payload?.level || null;
+					if (levelFilter && levelFilter !== 'All') {
+						if (!itemLevel || String(itemLevel) !== String(levelFilter)) return null;
+					}
 					return m <= month ? (typeof pb.time === 'number' ? pb.time : (typeof pb.time === 'string' ? parseTimeString(pb.time) : null)) : null;
 				})
 				.filter((x): x is number => x != null && !isNaN(x));

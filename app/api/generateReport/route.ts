@@ -125,7 +125,8 @@ export async function GET(req: NextRequest) {
         byName[key].appearances.push({ event: r.event, age: r.age, sex: r.sex, rank: r.rank, time: r.time, date: r.date });
         // merge personalBests arrays so we can persist them later
         if (r.personalBests && Array.isArray(r.personalBests) && r.personalBests.length) {
-            byName[key].personalBests.push(...r.personalBests);
+            const annotated = (r.personalBests || []).map((pb: any) => ({ ...(pb || {}), event: r.event, age: r.age, sex: r.sex }));
+            byName[key].personalBests.push(...annotated);
         }
         const times = (r.personalBests || []).map((p: any) => p.time).filter((t: any) => t != null && !isNaN(t));
         if (times.length) {
@@ -169,11 +170,18 @@ export async function GET(req: NextRequest) {
                     for (const s of out || []) {
                         const pbsList = (s.personalBests || []);
                         for (const pb of pbsList) {
-                            // pb.date expected like 'DD/MM/YY' or 'DD/MM/YYYY'
-                            const d = parseDateString(String(pb.date || ''));
-                            const pbDate = d ? d.toISOString().slice(0,10) : runIso; // fallback to runIso
+                            // pb.date expected like 'DD/MM/YY' or 'DD/MM/YYYY' — try robust parsing
+                            const rawDate = String(pb.date || '').trim();
+                            let parsed: Date | null = null;
+                            if (rawDate) parsed = parseDateString(rawDate);
+                            if (!parsed && rawDate) {
+                                const alt = new Date(rawDate);
+                                if (!isNaN(alt.getTime())) parsed = alt;
+                            }
+                            const pbDate = parsed ? parsed.toISOString().slice(0,10) : null; // preserve original PB date when possible
                             const timeVal = (pb.time == null) ? null : (typeof pb.time === 'number' ? pb.time : Number(pb.time));
                             if (timeVal == null || isNaN(timeVal)) continue;
+                            // payload was annotated when aggregating byName (includes event/age/sex)
                             pbRows.push({ tiref: s.tiref ?? null, name: s.name ?? null, time: timeVal, meet: pb.meet ?? null, payload: pb, pb_date: pbDate });
                         }
                     }
@@ -185,13 +193,8 @@ export async function GET(req: NextRequest) {
                     console.error('Failed to persist swimmer_personal_bests:', String(pbErr));
                 }
             } catch (dbErr) {
-                // on DB failure, fall back to writing file
-                console.error('Supabase write failed, falling back to filesystem:', String(dbErr));
-                const snapDir = path.join(process.cwd(), '.cache', 'rankingSnapshots');
-                fs.mkdirSync(snapDir, { recursive: true });
-                const outSnap = { generatedAt: new Date().toISOString(), runIso, snapshots: snapshotsAll };
-                const file = path.join(snapDir, `${runIso}.json`);
-                try { fs.writeFileSync(file, JSON.stringify(outSnap), { encoding: 'utf8' }); } catch (e) {}
+                // on DB failure, do not write to local filesystem when Supabase is enabled
+                console.error('Supabase write failed; skipping filesystem fallback (USE_SUPABASE=true):', String(dbErr));
             }
         } else {
             const snapDir = path.join(process.cwd(), '.cache', 'rankingSnapshots');

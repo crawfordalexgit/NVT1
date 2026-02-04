@@ -48,7 +48,8 @@ export function buildPersonalBestUrl({
 	county = "XXXX",
 	club = "XXXX",
 	region = "P",
-	nationality = "E"
+	nationality = "E",
+	fullHistory = false
 }: {
 	pool: "L" | "S";
 	stroke: number;
@@ -60,9 +61,9 @@ export function buildPersonalBestUrl({
 	club?: string;
 	region?: string;
 	nationality?: string;
+	fullHistory?: boolean;
 }): string {
 	const params = new URLSearchParams({
-		back: "12months",
 		Pool: pool,
 		Stroke: stroke.toString(),
 		Sex: sex,
@@ -78,10 +79,23 @@ export function buildPersonalBestUrl({
 		TargetCounty: county,
 		TargetNationality: nationality,
 		tiref: tiref,
-		mode: pool,
 		tstroke: stroke.toString(),
 		tcourse: pool
 	});
+
+	if (fullHistory) {
+		// request full individual best history
+		params.set('back', 'individualbestname');
+		params.set('mode', 'A');
+		params.set('tcourse', pool);
+		// ensure tstroke present (already set as tstroke)
+		return maybeAppendVercelBypass(`https://www.swimmingresults.org/individualbest/personal_best_time_date.php?${params.toString()}`);
+	}
+
+	// default: last 12 months view
+	params.set('back', '12months');
+	params.set('mode', pool);
+	params.set('tcourse', pool);
 	return maybeAppendVercelBypass(`https://www.swimmingresults.org/individualbest/personal_best_time_date.php?${params.toString()}`);
 }
 

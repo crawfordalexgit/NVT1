@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { getReportCache, setReportCache } from './supabaseServer';
 
 type CacheEntry = { value: any; expiresAt: number };
 
@@ -43,10 +44,27 @@ export async function getCached(key: string): Promise<any | null> {
         if (mem.expiresAt > now) return mem.value;
         memoryCache.delete(key);
     }
-    // check fs
+    // If Supabase is enabled, use DB-only cache (no filesystem fallback)
+    if (process.env.USE_SUPABASE === 'true') {
+        try {
+            const dbv = await getReportCache(key);
+            if (dbv) {
+                // store in memory for quick reuse
+                memoryCache.set(key, { value: dbv, expiresAt: now + 60 * 60 * 1000 });
+                pruneMemory();
+                return dbv;
+            }
+        } catch (err) {
+            console.error('getReportCache failed:', String(err));
+            return null;
+        }
+        return null;
+    }
+
+    // check filesystem cache when DB is not enabled
     if (fsAvailable) {
         try {
-            const file = path.join(CACHE_DIR, encodeURIComponent(key) + '.json');
+            const file = path.join(CACHE_DIR, `${key}.json`);
             if (fs.existsSync(file)) {
                 const txt = fs.readFileSync(file, 'utf8');
                 const parsed = JSON.parse(txt) as CacheEntry;
@@ -71,9 +89,20 @@ export async function setCached(key: string, value: any, ttlSeconds: number) {
     const entry: CacheEntry = { value, expiresAt };
     memoryCache.set(key, entry);
     pruneMemory();
+    // If Supabase is enabled, write to DB only (no filesystem fallback)
+    if (process.env.USE_SUPABASE === 'true') {
+        try {
+            await setReportCache(key, value, ttlSeconds);
+        } catch (err) {
+            console.error('setReportCache failed; not writing to filesystem:', String(err));
+        }
+        return;
+    }
+
+    // Otherwise persist to filesystem cache
     if (fsAvailable) {
         try {
-            const file = path.join(CACHE_DIR, encodeURIComponent(key) + '.json');
+            const file = path.join(CACHE_DIR, `${key}.json`);
             fs.writeFileSync(file, JSON.stringify(entry), { encoding: 'utf8' });
         } catch (e) {
             // ignore
