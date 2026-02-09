@@ -34,8 +34,8 @@ export default function Report({ rankings = [], allSwimmersBests = [], ageGroup 
     });
 
     return (
-        <div className="mt-8">
-            <h3 className="text-lg font-semibold mb-3">Tonbridge Top-50 Report ({rows.length} swimmers)</h3>
+        <details className="mt-8 card p-4 btn-accent">
+            <summary className="text-xl font-semibold mb-2 cursor-pointer">Tonbridge Top-50 Report ({rows.length} swimmers)</summary>
             <div className="overflow-x-auto bg-gray-900 rounded">
                 <table className="min-w-full text-sm">
                     <thead>
@@ -64,6 +64,6 @@ export default function Report({ rankings = [], allSwimmersBests = [], ageGroup 
                     </tbody>
                 </table>
             </div>
-        </div>
+        </details>
     );
 }

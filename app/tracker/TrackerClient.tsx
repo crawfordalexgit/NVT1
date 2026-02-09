@@ -14,13 +14,19 @@ export default function TrackerClient() {
     const [event, setEvent] = useState(eventOptions[0]);
     const [ageGroup, setAgeGroup] = useState("");
     const [sex, setSex] = useState<"M" | "F" | "All">("M");
-    const [levelFilter, setLevelFilter] = useState<string>('1');
+    const [levelFilter, setLevelFilter] = useState<string>('All');
     const [rankings, setRankings] = useState<any[]>([]);
     const [tonbridgeSwimmers, setTonbridgeSwimmers] = useState<any[]>([]);
     const [swimmer, setSwimmer] = useState("");
     const [personalBests, setPersonalBests] = useState<any[]>([]);
     const [allSwimmersBests, setAllSwimmersBests] = useState<any[]>([]);
     const [virtualMonths, setVirtualMonths] = useState<{month:string; ranking:any[]}[]>([]);
+    const [virtualDataSource, setVirtualDataSource] = useState<'db'|'pb'|'snapshot'|'live'|'unknown'|null>(null);
+    const [showDiagnostics, setShowDiagnostics] = useState<boolean>(false);
+    const [showVirtualTables, setShowVirtualTables] = useState<boolean>(true);
+    // Toggle to temporarily disable previous-year overlay and its data fetches
+    // Re-enabled per user request
+    const ENABLE_PREV = true;
     const [showPrevOverlay, setShowPrevOverlay] = useState<boolean>(true);
     const [nextAgeVirtualMonths, setNextAgeVirtualMonths] = useState<{month:string; ranking:any[]}[]>([]);
     const [nextAgeAllSwimmersBests, setNextAgeAllSwimmersBests] = useState<any[]>([]);
@@ -35,6 +41,8 @@ export default function TrackerClient() {
     const [expandedVirtualMonths, setExpandedVirtualMonths] = useState<Record<string, boolean>>({});
     const [expandedNextAgeVirtualMonths, setExpandedNextAgeVirtualMonths] = useState<Record<string, boolean>>({});
     const [loading, setLoading] = useState(false);
+    const [showNationals, setShowNationals] = useState<boolean>(false);
+    
     const [rankTrend, setRankTrend] = useState<{date:string,rank:number|null,time?:any}[]>([]);
     const [internalUrls, setInternalUrls] = useState<string[]>([]);
     const [debugSamples, setDebugSamples] = useState<Record<string, any>>({});
@@ -42,6 +50,9 @@ export default function TrackerClient() {
     const [transformOrigin, setTransformOrigin] = useState<string>('50% 0%');
     const [hoverChart, setHoverChart] = useState<boolean>(false);
     const chartRef = React.useRef<HTMLDivElement | null>(null);
+    const baselineAutoFetchKey = React.useRef<string | null>(null);
+    const [graphKey, setGraphKey] = useState<number>(0);
+    // debugging UI disabled in production
 
     async function fetchRankings() {
         if (!event || !ageGroup) return;
@@ -99,6 +110,8 @@ export default function TrackerClient() {
             if (i + concurrency < items.length) await new Promise(res => setTimeout(res, 100));
         }
         setAllSwimmersBests(results);
+        // trigger chart regeneration after PB data loaded
+        setGraphKey(k => k + 1);
         setLoading(false);
     }
 
@@ -112,6 +125,15 @@ export default function TrackerClient() {
     React.useEffect(() => {
         if (event && ageGroup) fetchRankings();
     }, [event, ageGroup]);
+
+    // default showNationals for age 14+
+    React.useEffect(() => {
+        try {
+            const ag = Number(ageGroup);
+            if (!isNaN(ag) && ag >= 14) setShowNationals(true);
+            else setShowNationals(false);
+        } catch (e) { setShowNationals(false); }
+    }, [ageGroup]);
 
     React.useEffect(() => {
         try {
@@ -134,17 +156,20 @@ export default function TrackerClient() {
         if (rankings.length > 0) fetchAllSwimmersBests(rankings);
     }, [rankings]);
 
+    // auto-fetch/store behavior removed (handled manually via explicit actions)
+
     // fetch top-50 rankings and PBs for the next age up cohort
     React.useEffect(() => {
         async function loadNextAgePBs() {
             if (!event || !ageGroup || !sex) return setNextAgeAllSwimmersBests([]);
             const nextAge = String(Number(ageGroup) + 1);
             try {
+                setLoading(true);
                 const url = `/api/loadData?pool=L&stroke=${eventNameToCode[event]}&sex=${sex==='All'?'M':sex}&ageGroup=${nextAge}&date=31/12/2026`;
                 setInternalUrls(prev => [...prev, url]);
                 const res = await fetch(url);
                 const j = await res.json();
-                const swimmersList = (j.swimmers || []).slice(0, 50).map((s: any, i: number) => ({ ...s, rank: i + 1 }));
+                const swimmersList = (j.swimmers || []).map((s: any, i: number) => ({ ...s, rank: i + 1 }));
                 // reuse PB fetch pattern
                 const concurrency = 6;
                 const results: any[] = [];
@@ -166,9 +191,12 @@ export default function TrackerClient() {
                     if (i + concurrency < swimmersList.length) await new Promise(res => setTimeout(res, 100));
                 }
                 setNextAgeAllSwimmersBests(results);
+                // trigger chart regeneration after next-age PBs loaded
+                setGraphKey(k => k + 1);
             } catch (e) {
                 setNextAgeAllSwimmersBests([]);
             }
+            finally { setLoading(false); }
         }
         loadNextAgePBs();
     }, [event, ageGroup, sex]);
@@ -183,6 +211,15 @@ export default function TrackerClient() {
                 const j = await res.json();
                 if (j && j.ok && Array.isArray(j.months)) {
                     setVirtualMonths(j.months || []);
+                    // record data source when provided by server
+                    // prefer explicit `source` flag, otherwise infer
+                    if (j.source === 'live') setVirtualDataSource('live');
+                    else if (j.source === 'persisted' || j.source === 'monthly_cutoffs') setVirtualDataSource('db');
+                    else if (j.source === 'pbs') setVirtualDataSource('pb');
+                    else if (j.source === 'snapshots') setVirtualDataSource('snapshot');
+                    else setVirtualDataSource(j.live ? 'live' : (j.months && j.months.length && j.months.some((m:any)=>m.ranking && m.ranking.length) ? 'pb' : 'unknown'));
+                    // trigger chart regeneration after virtual months loaded
+                    setGraphKey(k => k + 1);
                 } else {
                     setVirtualMonths([]);
                 }
@@ -192,6 +229,67 @@ export default function TrackerClient() {
         }
         loadVirtual();
     }, [event, ageGroup, sex, levelFilter]);
+
+    // Force live scrape for virtual rankings (current and previous-year)
+    async function fetchLiveVirtual() {
+        if (!event || !ageGroup || !sex) return;
+        setLoading(true);
+        try {
+            const monthsParam = String((displayedVirtualMonths && displayedVirtualMonths.length) ? displayedVirtualMonths.length : Number(monthsWindow) || 18);
+            const q = new URLSearchParams({ event, ageGroup, sex, months: monthsParam, level: levelFilter, live: '1' });
+            const res = await fetch(`/api/virtualRanking?${q.toString()}`);
+            if (res.ok) {
+                const j = await res.json().catch(() => ({}));
+                if (j && j.ok && Array.isArray(j.months)) {
+                    setVirtualMonths(j.months || []);
+                    setVirtualDataSource('live');
+                    setGraphKey(k => k + 1);
+                }
+            }
+            // also fetch previous-year (next-age) live months if overlay is shown
+            if (ENABLE_PREV && showPrevOverlay) {
+                const nextAge = String(Number(ageGroup) + 1);
+                const q2 = new URLSearchParams({ event, ageGroup: nextAge, sex, months: monthsParam, level: levelFilter, live: '1' });
+                const res2 = await fetch(`/api/virtualRanking?${q2.toString()}`);
+                if (res2.ok) {
+                    const j2 = await res2.json().catch(() => ({}));
+                    if (j2 && j2.ok && Array.isArray(j2.months)) {
+                        setNextAgeVirtualMonths(j2.months || []);
+                        setGraphKey(k => k + 1);
+                        setVirtualDataSource('live');
+                    }
+                }
+            }
+        } catch (e) {
+            // ignore errors for now
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    // Compute previous-year cutoff series from next-age PBs (shift months forward by +1 year)
+    const prevYearCutoffShifted = React.useMemo(() => {
+        try {
+            if (!nextAgeAllSwimmersBests || nextAgeAllSwimmersBests.length === 0) return [];
+            if (!nextAgeVirtualMonths || nextAgeVirtualMonths.length === 0) return [];
+            const start = nextAgeVirtualMonths[0]?.month;
+            const end = nextAgeVirtualMonths[nextAgeVirtualMonths.length - 1]?.month;
+            const swimmersForPrev = (nextAgeAllSwimmersBests || []).map((s: any) => ({ name: s.name, data: s.data || [] }));
+            const nextAgeStr = String(Number(ageGroup) + 1);
+            const { cutoffSeries: raw, cutoffSeriesNationals: rawNationals } = calculateMonthlyCutoffFromTop50(swimmersForPrev, [], undefined, nextAgeStr, undefined, start, end, levelFilter);
+            // shift month keys forward by one year to align with current-year months
+            const shifted = (raw || []).map((c: any) => {
+                try {
+                    const parts = String(c.month).split('-').map(Number);
+                    if (parts.length !== 2) return c;
+                    const y = parts[0] + 1;
+                    const m = String(parts[1]).padStart(2, '0');
+                    return { month: `${y}-${m}`, cutoff: c.cutoff, reason: c.reason };
+                } catch (e) { return c; }
+            });
+            return shifted;
+        } catch (e) { return []; }
+    }, [nextAgeAllSwimmersBests, nextAgeVirtualMonths, ageGroup, levelFilter]);
 
     
 
@@ -228,7 +326,7 @@ export default function TrackerClient() {
     // Ensure previous-year (next-age) virtual months are loaded on mount when overlay is enabled
     React.useEffect(() => {
         async function loadPrev() {
-            if (!showPrevOverlay || !event || !ageGroup) return;
+            if (!ENABLE_PREV || !showPrevOverlay || !event || !ageGroup) return;
             try {
                 const nextAge = String(Number(ageGroup) + 1);
                 const monthsParam = String((displayedVirtualMonths && displayedVirtualMonths.length) ? displayedVirtualMonths.length : 18);
@@ -239,9 +337,16 @@ export default function TrackerClient() {
                 if (j && j.ok && Array.isArray(j.months)) setNextAgeVirtualMonths(j.months || []);
                 else setNextAgeVirtualMonths([]);
             } catch (e) { setNextAgeVirtualMonths([]); }
+                    // trigger chart regeneration after next-age months loaded
+                    setGraphKey(k => k + 1);
         }
         loadPrev();
     }, [showPrevOverlay, event, ageGroup, sex, displayedVirtualMonths.length, levelFilter]);
+
+    // Clear any stale previous-year months when the selected event/age changes
+    React.useEffect(() => {
+        setNextAgeVirtualMonths([]);
+    }, [event, ageGroup]);
 
     // per-chart wheel handler will be attached to the chart container (see below)
 
@@ -326,7 +431,7 @@ export default function TrackerClient() {
                 endMonth = displayedVirtualMonths[displayedVirtualMonths.length - 1].month;
             }
             const monthsToShow = startMonth && endMonth ? undefined : Number(monthsWindow || 18);
-            const { cutoffSeries, trackedSeries } = calculateMonthlyCutoffFromTop50(swimmersForCutoff, rankings, swimmer || undefined, ageGroup || '13', monthsToShow as any, startMonth, endMonth, levelFilter);
+            const { cutoffSeries, trackedSeries, cutoffSeriesNationals } = calculateMonthlyCutoffFromTop50(swimmersForCutoff, rankings, swimmer || undefined, ageGroup || '13', monthsToShow as any, startMonth, endMonth, levelFilter);
 
             // KPIs
             let monthsMeeting = 0;
@@ -359,11 +464,25 @@ export default function TrackerClient() {
             })();
 
             const monthsShown = cutoffSeries.length;
-            return { cutoffSeries, trackedSeries, kpis: { monthsMeeting, virtualCount, avgMargin, latestMargin, monthsShown, monthsRecorded } };
+            return { cutoffSeries, trackedSeries, cutoffSeriesNationals, kpis: { monthsMeeting, virtualCount, avgMargin, latestMargin, monthsShown, monthsRecorded } };
         } catch (e) {
             return { cutoffSeries: [], trackedSeries: [], kpis: null };
         }
     }, [allSwimmersBests, rankings, swimmer, ageGroup, displayedVirtualMonths, monthsWindow, customStart, customEnd, levelFilter]);
+
+    // Auto-trigger baseline PB fetch once per event/age/sex when baseline data is missing
+    React.useEffect(() => {
+        try {
+            const key = `${event || ''}-${ageGroup || ''}-${sex || ''}`;
+            const noBaseline = computed && Array.isArray((computed as any).cutoffSeries) && (computed as any).cutoffSeries.length === 0;
+            const haveRankings = rankings && rankings.length > 0;
+            if (noBaseline && haveRankings && baselineAutoFetchKey.current !== key) {
+                baselineAutoFetchKey.current = key;
+                // fetch PBs for current rankings to build baseline
+                fetchAllSwimmersBests(rankings);
+            }
+        } catch (e) { }
+    }, [computed, rankings, event, ageGroup, sex]);
 
     const predictionData = React.useMemo(() => {
         try {
@@ -490,6 +609,8 @@ export default function TrackerClient() {
         }
     }, [allSwimmersBests, nextAgeAllSwimmersBests, baselineChoice, allowFallback, qualEnd, rankings, swimmer, excludeSlowerBaseline]);
 
+    // Prediction debug posting removed
+
     const cohortPrediction = React.useMemo(() => {
         try {
             if (!nextAgeAllSwimmersBests || nextAgeAllSwimmersBests.length === 0) return null;
@@ -604,12 +725,33 @@ export default function TrackerClient() {
     }, [swimmer, allSwimmersBests, baselineChoice, allowFallback, qualEnd, predictionData]);
 
     return (
-        <div className="p-8 max-w-3xl mx-auto">
-            <h1 className="text-2xl font-bold mb-4">TSC National Qualification Tracker</h1>
-            <form className="space-y-4 card" onSubmit={e => e.preventDefault()}>
+        <div className="p-8 px-4 sm:px-8 max-w-7xl mx-auto">
+            <div className="mb-4">
+                <div className="flex items-start justify-between gap-4">
+                    <div className="flex items-center gap-4 min-w-0">
+                        <div className="w-12 h-12 sm:w-14 sm:h-14 flex items-center justify-center rounded-lg bg-gradient-to-br from-cyan-400 to-indigo-600 flex-shrink-0">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="w-7 h-7 text-white" fill="none" stroke="currentColor">
+                                <circle cx="7" cy="7" r="1.5" fill="white" />
+                                <path d="M3 12c3-1 6-1 9 0s6 1 9 0" strokeWidth="1.5" stroke="white" strokeLinecap="round" strokeLinejoin="round" />
+                                <path d="M3 15c3-1 6-1 9 0s6 1 9 0" strokeWidth="1" stroke="white" strokeLinecap="round" strokeLinejoin="round" opacity="0.85" />
+                            </svg>
+                        </div>
+                        <div className="min-w-0">
+                            <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight leading-tight truncate">TSC National Qualification Tracker</h1>
+                            <p className="text-sm text-gray-400 mt-1 truncate">Track cohort predictions, virtual rankings, and personal bests</p>
+                        </div>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                        <div className="text-xs text-gray-400">Season</div>
+                        <div className="mt-1 inline-block text-sm font-medium text-white bg-gradient-to-r from-indigo-600 to-pink-600 px-3 py-1 rounded-full">2025–26</div>
+                    </div>
+                </div>
+            </div>
+            <form className="space-y-4 card w-full max-w-none" onSubmit={e => e.preventDefault()}>
                 {/* debug toggle hidden */}
                 <div>
                     <label className="block mb-1">Event</label>
+                    
                     <select value={event} onChange={e => setEvent(e.target.value)} className="w-full p-2 border rounded bg-gray-900 text-white">
                         {eventOptions.map(ev => <option key={ev} value={ev}>{ev}</option>)}
                     </select>
@@ -650,41 +792,6 @@ export default function TrackerClient() {
                     </select>
                     <div className="mt-2">
                         <button className="btn btn-sm" type="button" onClick={refreshSelectedSwimmerPB} disabled={!swimmer || loading}>Refresh PB</button>
-                        <button className="btn btn-sm ml-2" type="button" onClick={async () => {
-                            if (!event || !ageGroup || !sex) return alert('select event/age/sex first');
-                            if (!confirm(`Fetch and store PBs for ${event} ${sex} ${ageGroup}?`)) return;
-                            setLoading(true);
-                            try {
-                                const res = await fetch('/api/storeEventPersonalBests', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ event, ageGroup, sex }) });
-                                const j = await res.json();
-                                if (res.ok && j.ok) {
-                                    alert(`Stored ${j.stored} PB rows (run ${j.runId})`);
-                                } else {
-                                    alert('Failed: ' + (j.error || JSON.stringify(j)));
-                                }
-                            } catch (e) {
-                                alert('Error: ' + String(e));
-                            } finally { setLoading(false); }
-                        }} disabled={loading}>Fetch & Store PBs</button>
-
-                        
-
-                        <button className="btn btn-ghost btn-sm ml-2" type="button" onClick={async () => {
-                            if (!event || !ageGroup || !sex) return alert('select event/age/sex first');
-                            setLoading(true);
-                            try {
-                                const res = await fetch('/api/storeEventPersonalBests', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ event, ageGroup, sex, preview: true }) });
-                                const j = await res.json();
-                                if (res.ok && j.ok) {
-                                    const sampleText = (j.sample || []).map((r: any, idx: number) => `${idx+1}. ${r.tiref} ${r.name} ${r.pb_date || ''} ${r.time} (${r.meet || ''})`).join('\n');
-                                    alert(`Stored preview: would store ${j.wouldStore} rows. Sample:\n\n${sampleText}`);
-                                } else {
-                                    alert('Failed: ' + (j.error || JSON.stringify(j)));
-                                }
-                            } catch (e) {
-                                alert('Error: ' + String(e));
-                            } finally { setLoading(false); }
-                        }} disabled={loading}>Store Preview</button>
                     </div>
                 </div>
             </form>
@@ -700,9 +807,25 @@ export default function TrackerClient() {
 
             {/* KPIs + Graph: placed immediately under filters as requested */}
             <div className="mt-8">
-                <h2 className="text-xl font-semibold mb-2">Historical Qualifying Time Graph</h2>
-                <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-4">
-                    <div className="card p-4 btn-accent">
+                <div className="flex items-center justify-between">
+                    <h2 className="text-xl font-semibold mb-2">Historical Qualifying Time Graph</h2>
+                    <div className="flex items-center">
+                    {virtualDataSource && (
+                        <div className="ml-4 text-sm">
+                            <span className="text-xs text-gray-400 mr-2">Data</span>
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-white text-xs ${virtualDataSource==='live' ? 'bg-red-600' : virtualDataSource==='db' ? 'bg-indigo-600' : virtualDataSource==='pb' ? 'bg-emerald-600' : virtualDataSource==='snapshot' ? 'bg-yellow-600' : 'bg-gray-600'}`}>
+                                {virtualDataSource === 'live' ? 'Live scrape' : virtualDataSource === 'db' ? 'Persisted DB' : virtualDataSource === 'pb' ? 'Stored PBs' : virtualDataSource === 'snapshot' ? 'Snapshots' : 'Unknown'}
+                            </span>
+                        </div>
+                    )}
+                    <div className="flex items-center gap-3">
+                        <button type="button" className="ml-3 text-xs text-gray-300 underline" onClick={() => setShowDiagnostics(s => !s)}>{showDiagnostics ? 'Hide diagnostics' : 'Show diagnostics'}</button>
+                        <button type="button" className="ml-1 text-xs text-gray-300 underline" onClick={() => setShowVirtualTables(s => !s)}>{showVirtualTables ? 'Hide tables' : 'Show tables'}</button>
+                    </div>
+                    </div>
+                </div>
+                <div className="flex items-stretch gap-6 mb-6 overflow-x-auto">
+                    <div className="card p-3 btn-accent min-w-[12rem] flex-shrink-0">
                         <div className="text-sm text-gray-800">Rank Trend</div>
                         <div className="text-2xl font-bold">
                             {trendKPIs ? (
@@ -716,20 +839,20 @@ export default function TrackerClient() {
                         </div>
                         <div className="text-xs text-gray-300 mt-1">{trendKPIs ? `slope ${trendKPIs.slope ? trendKPIs.slope.toFixed(2) : '0.00'} ranks/run over ${trendKPIs.runs} runs` : ''}</div>
                     </div>
-                    <div className="card p-4 btn-accent">
+                    <div className="card p-3 btn-accent min-w-[12rem] flex-shrink-0">
                         <div className="text-sm text-gray-800">Avg Margin</div>
                         <div className="text-2xl font-bold">{computed.kpis ? (computed.kpis.avgMargin == null ? '--' : (computed.kpis.avgMargin >= 0 ? '+' : '-') + formatTimeValue(Math.abs(computed.kpis.avgMargin))) : "--"}</div>
                     </div>
-                    <div className="card p-4 btn-accent">
+                    <div className="card p-3 btn-accent min-w-[12rem] flex-shrink-0">
                         <div className="text-sm text-gray-800">Latest Margin</div>
                         <div className="text-2xl font-bold">{computed.kpis ? (computed.kpis.latestMargin == null ? '--' : (computed.kpis.latestMargin >= 0 ? '+' : '-') + formatTimeValue(Math.abs(computed.kpis.latestMargin))) : "--"}</div>
                     </div>
-                    <div className="card p-4 btn-accent" title="Predicted Qual Time: baseline minus cohort avg drop (simple method). Hover for details.">
+                    <div className="card p-3 btn-accent min-w-[12rem] flex-shrink-0" title="Predicted Qual Time: baseline minus cohort avg drop (simple method). Hover for details.">
                         <div className="text-sm text-gray-800">Predicted Qual Time</div>
                         <div className="text-2xl font-bold">{trackedPrediction && trackedPrediction.predicted != null ? formatTimeValue(trackedPrediction.predicted) : '--'}</div>
                         <div className="text-xs text-gray-300 mt-1">{trackedPrediction && trackedPrediction.avgDrop != null ? `based on avg drop ${trackedPrediction.avgDrop ? formatTimeValue(trackedPrediction.avgDrop) : ''}` : ''}</div>
                     </div>
-                    <div className="card p-4 btn-accent" title="Trend-based cohort prediction: fits per-swimmer linear trends, shrunk toward cohort slope; shows predicted time at qualifying end.">
+                    <div className="card p-3 btn-accent min-w-[12rem] flex-shrink-0" title="Trend-based cohort prediction: fits per-swimmer linear trends, shrunk toward cohort slope; shows predicted time at qualifying end.">
                         <div className="text-sm text-gray-800">Predicted (Trend)</div>
                         <div className="text-2xl font-bold">{trackedTrendPrediction && trackedTrendPrediction.predicted != null ? formatTimeValue(trackedTrendPrediction.predicted) : '--'}</div>
                         <div className="text-xs text-gray-300 mt-1">{trackedTrendPrediction ? `${trackedTrendPrediction.method} (n=${trackedTrendPrediction.n})` : ''} {cohortPrediction && cohortPrediction.cohortSlope != null ? ` • cohort ${cohortPrediction.cohortSlope.toFixed(6)} sec/day` : ''}</div>
@@ -766,37 +889,81 @@ export default function TrackerClient() {
                                     </div>
                                     <div className="mb-2 flex items-center justify-between">
                                         <div className="text-sm text-gray-300">Qualifying Baseline</div>
-                                        <div className="text-xs text-gray-400 flex items-center gap-2" title="Use mouse wheel to zoom the graph. Double-click to reset zoom."> 
-                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M12 20c4.418 0 8-3.582 8-8s-3.582-8-8-8-8 3.582-8 8 3.582 8 8 8z" />
-                                            </svg>
-                                            <div className="hidden sm:block">Use mouse wheel to zoom, double-click to reset</div>
-                                        </div>
+                                                                        {/* zoom/reset hint removed because interaction is unreliable */}
                                     </div>
-                                    <div ref={chartRef} onMouseEnter={() => setHoverChart(true)} onMouseLeave={() => setHoverChart(false)} onWheel={(e) => {
-                                        e.preventDefault();
-                                        try {
-                                            const rect = chartRef.current?.getBoundingClientRect();
-                                            const delta = (e as React.WheelEvent).deltaY;
-                                            // adjust zoom
-                                            setZoom(z => {
-                                                const factor = delta > 0 ? 0.9 : 1.1;
-                                                const next = Math.max(1, Math.min(6, +(z * factor).toFixed(3)));
-                                                return next;
-                                            });
-                                            // compute transform origin relative to cursor if we have rect
-                                            if (rect) {
-                                                const clientX = (e as any).clientX as number;
-                                                const clientY = (e as any).clientY as number;
-                                                const xPercent = ((clientX - rect.left) / rect.width) * 100;
-                                                const yPercent = ((clientY - rect.top) / rect.height) * 100;
-                                                setTransformOrigin(`${xPercent}% ${yPercent}%`);
-                                            }
-                                        } catch (err) { }
-                                    }} onDoubleClick={() => { setZoom(1); setTransformOrigin('50% 0%'); }} style={{ overflow: 'hidden' }}>
-                                        <div style={{ transform: `scale(${zoom})`, transformOrigin }}>
-                                            <Virtual20thSeriesChart months={displayedVirtualMonths || []} trackedSeries={computed.trackedSeries || []} compareMonths={shiftedNextAgeVirtualMonths} highlightStart={qualStart} highlightEnd={qualEnd} />
-                                        </div>
+                                    <div className="mb-3 flex items-center gap-2">
+                                        <label className="text-sm text-gray-400">Live</label>
+                                        <button type="button" className="btn btn-sm" onClick={async () => { await fetchLiveVirtual(); }} disabled={loading}>Force live</button>
+                                    </div>
+                                    <div className="relative" ref={chartRef} onMouseEnter={() => setHoverChart(true)} onMouseLeave={() => setHoverChart(false)}>
+                                        <Virtual20thSeriesChart
+                                            key={graphKey}
+                                            months={displayedVirtualMonths || []}
+                                            trackedSeries={computed.trackedSeries || []}
+                                            compareMonths={(ENABLE_PREV && showPrevOverlay) ? shiftedNextAgeVirtualMonths : []}
+                                            fallbackCutoffSeries={(computed && (computed as any).cutoffSeries) || []}
+                                            fallbackPrevCutoffSeries={prevYearCutoffShifted || []}
+                                            nationalsCutoffSeries={(computed && (computed as any).cutoffSeriesNationals) || []}
+                                            showNationals={showNationals}
+                                            highlightStart={qualStart}
+                                            highlightEnd={qualEnd}
+                                        />
+                                        {/* Explain missing baseline/previous-year data and offer action */}
+                                        {computed && Array.isArray(computed.cutoffSeries) && computed.cutoffSeries.length === 0 && (
+                                            <div className="mt-3 text-sm text-yellow-300">No qualifying baseline could be computed for this event/age — insufficient PB data or virtual rankings.</div>
+                                        )}
+                                        {ENABLE_PREV && showPrevOverlay && Array.isArray(shiftedNextAgeVirtualMonths) && shiftedNextAgeVirtualMonths.length === 0 && (
+                                            <div className="mt-2 text-sm text-gray-400">Previous-year overlay not available for this event/age.</div>
+                                        )}
+                                        {/* manual load removed — auto-fetch will trigger when appropriate */}
+
+                                        {/* Diagnostics to help explain empty baseline (hidden by default) */}
+                                        {showDiagnostics && (
+                                            <>
+                                                <div className="mt-3 text-xs text-gray-400 space-y-1">
+                                                    <div>Rankings: {rankings ? rankings.length : 0} ({(rankings || []).filter(r=>r && r.tiref).length} with tiref)</div>
+                                                    <div>PB sets fetched: {allSwimmersBests ? allSwimmersBests.length : 0}</div>
+                                                    <div>Computed cutoff points: {(computed && Array.isArray((computed as any).cutoffSeries)) ? (computed as any).cutoffSeries.length : 0}</div>
+                                                    <div>Computed tracked points: {(computed && Array.isArray((computed as any).trackedSeries)) ? (computed as any).trackedSeries.length : 0}</div>
+                                                    <div>Virtual months: {displayedVirtualMonths ? displayedVirtualMonths.length : 0} / Prev-year months: {(shiftedNextAgeVirtualMonths||[]).length}</div>
+                                                    {(rankings && (rankings||[]).filter(r=>r && r.tiref).length === 0) && (
+                                                        <div className="text-yellow-300">Note: rankings lack swimmer tiref identifiers; PBs cannot be fetched by tiref.</div>
+                                                    )}
+                                                </div>
+                                                {/* Detailed diagnostic dump for troubleshooting empty baseline */}
+                                                <details className="mt-2 text-xs text-gray-400">
+                                                    <summary className="cursor-pointer mb-1">Show series diagnostics</summary>
+                                                    <div className="bg-gray-900 p-2 rounded text-xs overflow-auto max-h-48">
+                                                        <div><strong>cutoffSeries (first/last 3):</strong></div>
+                                                        <pre className="whitespace-pre-wrap">{JSON.stringify(((computed && (computed as any).cutoffSeries) || []).slice(0,3).concat((((computed && (computed as any).cutoffSeries) || []).slice(-3))), null, 2)}</pre>
+                                                        <div className="mt-2"><strong>trackedSeries (first/last 3):</strong></div>
+                                                        <pre className="whitespace-pre-wrap">{JSON.stringify(((computed && (computed as any).trackedSeries) || []).slice(0,3).concat((((computed && (computed as any).trackedSeries) || []).slice(-3))), null, 2)}</pre>
+                                                        <div className="mt-2"><strong>displayedVirtualMonths (first/last 3):</strong></div>
+                                                        <pre className="whitespace-pre-wrap">{JSON.stringify((displayedVirtualMonths || []).slice(0,3).concat((displayedVirtualMonths || []).slice(-3)), null, 2)}</pre>
+                                                        <div className="mt-2"><strong>shiftedNextAgeVirtualMonths (first/last 3):</strong></div>
+                                                        <pre className="whitespace-pre-wrap">{JSON.stringify(((shiftedNextAgeVirtualMonths||[]).slice(0,3)).concat(((shiftedNextAgeVirtualMonths||[]).slice(-3))), null, 2)}</pre>
+                                                    </div>
+                                                </details>
+                                            </>
+                                        )}
+                                        {loading && (
+                                            <div className="absolute inset-0 bg-black/60 flex items-center justify-center pointer-events-none">
+                                                <div className="flex items-center space-x-2 text-white">
+                                                    <svg className="animate-spin h-6 w-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                                                    </svg>
+                                                    <div>Loading data…</div>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                    {/* Event/key diagnostics */}
+                                    <div className="mt-3 text-xs text-gray-400">
+                                        <div>Selected event: {event} (code: {event ? (eventNameToCode[event] ?? 'N/A') : 'N/A'})</div>
+                                        <div>API key used for snapshots: {event ? `${event}|${ageGroup}|${sex}` : 'n/a'}</div>
+                                        <div>Next-age PBs fetched: {nextAgeAllSwimmersBests ? nextAgeAllSwimmersBests.length : 0}</div>
+                                        <div>Prev-year cutoff shifted length: {prevYearCutoffShifted ? prevYearCutoffShifted.length : 0}</div>
                                     </div>
                                     <div className="mt-2 flex items-center gap-2">
                             <input id="prevOverlay" type="checkbox" checked={showPrevOverlay} onChange={async (e) => {
@@ -822,6 +989,10 @@ export default function TrackerClient() {
                             }} />
                             <label htmlFor="prevOverlay" className="text-sm text-gray-300">Previous Year</label>
                         </div>
+                                        <div className="ml-4 flex items-center gap-2">
+                                            <input id="showNationals" type="checkbox" checked={showNationals} onChange={e => setShowNationals(e.target.checked)} />
+                                            <label htmlFor="showNationals" className="text-sm text-gray-300">Show Nationals (40th)</label>
+                                        </div>
                                 </div>
                     </div>
                 ) : (
@@ -843,28 +1014,7 @@ export default function TrackerClient() {
                 )}
             </details>
 
-            {false && (
-                <div className="mt-6">
-                    <details className="card p-4 btn-accent">
-                        <summary className="cursor-pointer text-sm font-semibold text-white">Debug — internal calls & samples</summary>
-                        <div className="mt-3 text-xs text-gray-300">
-                            <div className="mb-2"><strong>Internal URLs:</strong></div>
-                            <div className="mb-2 text-xs text-gray-200">
-                                {internalUrls.slice(-50).map((u,i) => <div key={i}><code>{u}</code></div>)}
-                            </div>
-                            <div className="mb-2"><strong>Samples:</strong></div>
-                            <div className="text-xs text-gray-200">
-                                {Object.entries(debugSamples).map(([k,v],i) => (
-                                    <div key={i} className="mb-2">
-                                        <div className="text-xs font-semibold">{k}</div>
-                                        <pre className="text-xs text-gray-200 p-2 bg-gray-800 rounded overflow-auto">{JSON.stringify(v, null, 2)}</pre>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    </details>
-                </div>
-            )}
+                
 
             <details className="mt-8 card p-4 btn-accent">
                 <summary className="text-xl font-semibold mb-2 cursor-pointer">Personal Bests for {swimmer}</summary>
@@ -880,125 +1030,82 @@ export default function TrackerClient() {
                 </div>
             </details>
 
-            {/* Virtual Rankings by Month (collapsed) */}
-            {false && (<details className="mt-8 card p-4 btn-accent">
-                <summary className="text-xl font-semibold mb-2 cursor-pointer">Virtual Rankings (monthly cumulative)</summary>
-                <div className="mt-3 space-y-6">
-                {/* Virtual ranking tables hidden for now */}
-                {/* <div className="text-sm text-gray-300">No virtual ranking data available for this event/age/sex.</div> */}
-                {/* </div> */}
-                {displayedVirtualMonths.length === 0 ? (
-                    <div className="text-sm text-gray-300">No virtual ranking data available for this event/age/sex.</div>
-                ) : (
-                    <div className="space-y-6">
+            {/* Virtual Rankings by Month - hidden per user request */}
+            {/* Virtual Rankings by Month - expanded for debugging */}
+            {showVirtualTables && (
+            <details className="mt-8 card p-4 bg-gray-800 text-sm">
+                <summary className="text-lg font-semibold mb-2 cursor-pointer">Virtual Rankings (by month) — displayed months: {displayedVirtualMonths ? displayedVirtualMonths.length : 0}</summary>
+                {displayedVirtualMonths && displayedVirtualMonths.length > 0 ? (
+                    <div className="mt-2 space-y-3">
                         {displayedVirtualMonths.map((m, mi) => (
-                            <div key={m.month} className="card p-4">
-                                <div className="flex items-center justify-between mb-2">
-                                    <div className="font-semibold">{m.month}</div>
-                                    <div className="flex items-center gap-4">
-                                        <div className="text-sm text-gray-400">{m.ranking.length} swimmers</div>
-                                        <button className="btn btn-xs" onClick={() => setExpandedVirtualMonths(prev => ({ ...prev, [m.month]: !prev[m.month] }))}>{expandedVirtualMonths[m.month] ? 'Collapse' : 'Expand'}</button>
-                                    </div>
+                            <details key={m.month} className="bg-gray-900 p-3 rounded">
+                                <summary className="cursor-pointer">{m.month} — {Array.isArray(m.ranking) ? m.ranking.length : 0} entries</summary>
+                                <div className="mt-2 text-xs text-gray-300">
+                                    {(Array.isArray(m.ranking) && m.ranking.length > 0) ? (
+                                        <ol className="list-decimal list-inside space-y-1">
+                                            {m.ranking.map((r: any, idx: number) => {
+                                                // compute age anchored to qualifying end year if yob present
+                                                let displayAge: number | null = null;
+                                                const yobRaw = r.yob ?? r.payload?.yob ?? null;
+                                                if (yobRaw != null) {
+                                                    const y = Number(String(new Date(qualEnd).getFullYear()));
+                                                    const yobNum = Number(yobRaw);
+                                                    if (!isNaN(y) && !isNaN(yobNum)) displayAge = y - yobNum;
+                                                }
+                                                return (
+                                                <li key={idx} className="flex justify-between items-center gap-2">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="font-medium">{r.name || r.tiref || `#${idx+1}`}</span>
+                                                        {displayAge != null && <span className="text-xs text-gray-400">(age {displayAge})</span>}
+                                                        {displayAge == null && r.yob != null && <span className="text-xs text-gray-400">(yob {r.yob})</span>}
+                                                    </div>
+                                                    <div className="text-gray-400">{typeof r.time === 'number' ? formatTimeValue(r.time) : (r.time == null ? '--' : (typeof r.time === 'string' ? r.time : String(r.time)))}</div>
+                                                </li>
+                                                );
+                                            })}
+                                        </ol>
+                                    ) : (
+                                        <div className="text-xs text-gray-500">No ranking entries for this month.</div>
+                                    )}
                                 </div>
-                                {expandedVirtualMonths[m.month] && (
-                                    <table className="w-full text-sm">
-                                        <thead>
-                                            <tr className="text-left text-xs text-gray-400">
-                                                <th className="pr-4">#</th>
-                                                <th className="pr-4">Name</th>
-                                                <th className="pr-4">Tiref</th>
-                                                <th className="pr-4">Club</th>
-                                                <th className="pr-4">YoB</th>
-                                                <th className="pr-4">Time</th>
-                                                <th className="pr-4">PB Date</th>
-                                                <th className="pr-4">Meet</th>
-                                                <th className="pr-4">Venue</th>
-                                                <th className="pr-4">Level</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {m.ranking.map((r: any, i: number) => (
-                                                <tr key={r.tiref || r.name || i} className="border-t border-gray-800">
-                                                    <td className="py-2 pr-4">{i+1}</td>
-                                                    <td className="py-2 pr-4">{r.name}</td>
-                                                    <td className="py-2 pr-4">{r.tiref || ''}</td>
-                                                    <td className="py-2 pr-4">{r.club || (r.payload && r.payload.club) || ''}</td>
-                                                    <td className="py-2 pr-4">{r.yob || (r.payload && r.payload.yob) || ''}</td>
-                                                    <td className="py-2 pr-4">{typeof r.time === 'number' ? formatTimeValue(r.time) : r.time}</td>
-                                                    <td className="py-2 pr-4">{r.pb_date || (r.pbDate || '')}</td>
-                                                    <td className="py-2 pr-4">{r.meet || (r.payload && r.payload.meet) || ''}</td>
-                                                    <td className="py-2 pr-4">{r.venue || (r.payload && r.payload.venue) || ''}</td>
-                                                    <td className="py-2 pr-4">{r.level || (r.payload && r.payload.level) || ''}</td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                )}
-                            </div>
+                            </details>
                         ))}
                     </div>
+                ) : (
+                    <div className="mt-2 text-gray-400">No virtual months available.</div>
                 )}
-            </div>
-            </details>)}
-            {/* Debug UI hidden */}
-            
-            {/* Previous Years / Next Age Up Virtual Rankings */}
-            {false && (
-                <details className="mt-8 card p-4 btn-accent">
-                    <summary className="text-xl font-semibold mb-2 cursor-pointer">Previous Years Overlay — Next Age Up (virtual monthly)</summary>
-                    <div className="space-y-6 mt-4">
-                    {/* Previous-years virtual ranking tables hidden */}
-                    {/* <div className="space-y-6"> */}
-                    {/* </div> */}
-                        {nextAgeVirtualMonths.map((m, mi) => (
-                            <div key={m.month} className="card p-4">
-                                <div className="flex items-center justify-between mb-2">
-                                    <div className="font-semibold">{m.month}</div>
-                                    <div className="flex items-center gap-4">
-                                        <div className="text-sm text-gray-400">{m.ranking.length} swimmers</div>
-                                        <button className="btn btn-xs" onClick={() => setExpandedNextAgeVirtualMonths(prev => ({ ...prev, [m.month]: !prev[m.month] }))}>{expandedNextAgeVirtualMonths[m.month] ? 'Collapse' : 'Expand'}</button>
-                                    </div>
-                                </div>
-                                {expandedNextAgeVirtualMonths[m.month] && (
-                                    <table className="w-full text-sm">
-                                        <thead>
-                                            <tr className="text-left text-xs text-gray-400">
-                                                <th className="pr-4">#</th>
-                                                <th className="pr-4">Name</th>
-                                                <th className="pr-4">Tiref</th>
-                                                <th className="pr-4">Club</th>
-                                                <th className="pr-4">YoB</th>
-                                                <th className="pr-4">Time</th>
-                                                <th className="pr-4">PB Date</th>
-                                                <th className="pr-4">Meet</th>
-                                                <th className="pr-4">Venue</th>
-                                                <th className="pr-4">Level</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {m.ranking.map((r: any, i: number) => (
-                                                <tr key={r.tiref || r.name || i} className="border-t border-gray-800">
-                                                    <td className="py-2 pr-4">{i+1}</td>
-                                                    <td className="py-2 pr-4">{r.name}</td>
-                                                    <td className="py-2 pr-4">{r.tiref || ''}</td>
-                                                    <td className="py-2 pr-4">{r.club || (r.payload && r.payload.club) || ''}</td>
-                                                    <td className="py-2 pr-4">{r.yob || (r.payload && r.payload.yob) || ''}</td>
-                                                    <td className="py-2 pr-4">{typeof r.time === 'number' ? formatTimeValue(r.time) : r.time}</td>
-                                                    <td className="py-2 pr-4">{r.pb_date || (r.pbDate || '')}</td>
-                                                    <td className="py-2 pr-4">{r.meet || (r.payload && r.payload.meet) || ''}</td>
-                                                    <td className="py-2 pr-4">{r.venue || (r.payload && r.payload.venue) || ''}</td>
-                                                    <td className="py-2 pr-4">{r.level || (r.payload && r.payload.level) || ''}</td>
-                                                </tr>
+            </details>
+            )}
+
+            {/* Previous Years / Next Age Up Virtual Rankings - expanded for debugging */}
+            {showVirtualTables && (
+            <details className="mt-6 card p-4 bg-gray-800 text-sm">
+                <summary className="text-lg font-semibold mb-2 cursor-pointer">Previous-Year Overlay (shifted next-age months): {shiftedNextAgeVirtualMonths ? shiftedNextAgeVirtualMonths.length : 0}</summary>
+                {shiftedNextAgeVirtualMonths && shiftedNextAgeVirtualMonths.length > 0 ? (
+                    <div className="mt-2 space-y-3">
+                        {shiftedNextAgeVirtualMonths.map((m, mi) => (
+                            <details key={m.month} className="bg-gray-900 p-3 rounded">
+                                <summary className="cursor-pointer">{m.month} — {Array.isArray(m.ranking) ? m.ranking.length : 0} entries</summary>
+                                <div className="mt-2 text-xs text-gray-300">
+                                    {(Array.isArray(m.ranking) && m.ranking.length > 0) ? (
+                                        <ol className="list-decimal list-inside space-y-1">
+                                            {m.ranking.map((r: any, idx: number) => (
+                                                <li key={idx} className="flex justify-between"><span>{r.name || r.tiref || `#${idx+1}`}</span><span className="text-gray-400">{typeof r.time === 'number' ? formatTimeValue(r.time) : (r.time == null ? '--' : (typeof r.time === 'string' ? r.time : String(r.time)))}</span></li>
                                             ))}
-                                        </tbody>
-                                    </table>
-                                )}
-                            </div>
+                                        </ol>
+                                    ) : (
+                                        <div className="text-xs text-gray-500">No ranking entries for this month.</div>
+                                    )}
+                                </div>
+                            </details>
                         ))}
                     </div>
-                </details>
+                ) : (
+                    <div className="mt-2 text-gray-400">No previous-year months available.</div>
+                )}
+            </details>
             )}
-            
+
         </div>
     );
 }

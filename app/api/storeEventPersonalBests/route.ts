@@ -1,15 +1,13 @@
 import { NextRequest } from 'next/server';
 import { eventNameToCode } from '@/utils/eventNameToCode';
-import { insertSnapshotRun, upsertSwimmerPersonalBests, insertEventPBImport, insertEventPersonalBests } from '@/lib/supabaseServer';
+import { insertSnapshotRun, insertEventPBImport, insertEventPersonalBests, getEventPersonalBestsByTiref } from '@/lib/supabaseServer';
 import util from 'util';
 import { parseDateString } from '@/lib/time';
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    // Accept either `preview` (preferred) or legacy `dryRun` flag
-    const { event, ageGroup, sex, preview, dryRun } = body || {};
-    const isPreview = !!preview || !!dryRun;
+    const { event, ageGroup, sex } = body || {};
     if (!event || !ageGroup || !sex) return Response.json({ ok: false, error: 'missing parameters' }, { status: 400 });
 
     const strokeNum = eventNameToCode[event];
@@ -34,19 +32,34 @@ export async function POST(req: NextRequest) {
     const data = await res.json();
     const swimmers = data.swimmers || [];
 
-    // prepare a run id and iso (only inserted when not dryRun)
+    // prepare and insert a run id and iso
     const runIso = new Date().toISOString().slice(0,10);
     const run = { run_iso: runIso, generated_at: new Date().toISOString(), meta: { source: 'storeEventPersonalBests', event, ageGroup, sex } };
-    let inserted: any = null;
-    if (!isPreview) {
-      inserted = await insertSnapshotRun(run);
-    }
+    const inserted = await insertSnapshotRun(run);
 
     // For each swimmer, fetch PBs and filter by event
     const pbsToStore: any[] = [];
     for (let i = 0; i < swimmers.length; i++) {
       const s = swimmers[i];
       if (!s.tiref) continue;
+      // Check DB first: if we already have a PB for this swimmer/event/age/sex, skip scraping
+      try {
+        const existing = await getEventPersonalBestsByTiref(String(s.tiref));
+        const matches = (existing || []).filter((r: any) => {
+          if (!r) return false;
+          if (r.event !== event) return false;
+          if (r.age != null && String(r.age).trim() !== '' && String(r.age) !== String(ageGroup)) return false;
+          if (r.sex != null && String(r.sex).trim() !== '' && String(r.sex) !== String(sex)) return false;
+          return true;
+        });
+        if (matches.length) {
+          // existing PB present — skip scraping
+          continue;
+        }
+      } catch (e) {
+        // on DB error, fall back to scraping as before
+      }
+
       const pbUrl = new URL('/api/loadPersonalBest', base);
       pbUrl.searchParams.set('pool', 'L');
       pbUrl.searchParams.set('stroke', String(strokeNum));
@@ -54,7 +67,7 @@ export async function POST(req: NextRequest) {
       pbUrl.searchParams.set('ageGroup', String(ageGroup));
       pbUrl.searchParams.set('tiref', String(s.tiref));
       pbUrl.searchParams.set('date', dateStr);
-      pbUrl.searchParams.set('force', '1');
+      // do not force a fresh scrape by default — allow server-side caching to be used
 
       try {
         const r = await fetch(pbUrl.toString());
@@ -101,43 +114,36 @@ export async function POST(req: NextRequest) {
     }
 
     let eventInsertResult: any = null;
-    let swimmerUpsertResult: any = null;
     let eventInsertError: string | null = null;
-    let swimmerUpsertError: string | null = null;
 
+    // Deduplicate rows that would violate the DB unique constraint when
+    // performing a bulk upsert. Unique key: tiref,event,pb_date,time
+    let dedupedPbs: any[] = [];
     if (pbsToStore.length) {
-      if (isPreview) {
-        // persist the preview for inspection
-        try {
-          const key = `${event}|${ageGroup}|${sex}`;
-          await insertEventPBImport(null, key, event, ageGroup, sex, pbsToStore.length, pbsToStore.slice(0,10), pbsToStore);
-        } catch (e) {
-          const serialized = util.inspect(e, { depth: 5 });
-          console.error('Failed to persist preview:', serialized);
-          eventInsertError = serialized;
-        }
-      } else {
-        // persist typed event_personal_bests rows
-        try {
-          const rowsForEvent = pbsToStore.map(p => ({ ...p, run_id: inserted.run_id }));
-          eventInsertResult = await insertEventPersonalBests(rowsForEvent).catch(err => { throw err; });
-        } catch (e: any) {
-          const serialized = util.inspect(e, { depth: 5 });
-          eventInsertError = serialized;
-          console.error('Failed to insert event_personal_bests:', serialized);
-        }
-        // also keep legacy swimmer_personal_bests for compatibility
-        try {
-          swimmerUpsertResult = await upsertSwimmerPersonalBests(inserted.run_id, runIso, pbsToStore).catch(err => { throw err; });
-        } catch (e: any) {
-          const serialized = util.inspect(e, { depth: 5 });
-          swimmerUpsertError = serialized;
-          console.error('Failed to upsert swimmer_personal_bests:', serialized);
+      const seen = new Set<string>();
+      for (const p of pbsToStore) {
+        const key = `${p.tiref}||${p.event}||${p.pb_date || ''}||${p.time}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          dedupedPbs.push(p);
         }
       }
     }
 
-    return Response.json({ ok: true, preview: isPreview, wouldStore: pbsToStore.length, sample: pbsToStore.slice(0, 10), runId: inserted ? inserted.run_id : null, eventInsertResult, swimmerUpsertResult, eventInsertError, swimmerUpsertError });
+    if (dedupedPbs.length) {
+      // persist typed event_personal_bests rows
+      try {
+        const rowsForEvent = dedupedPbs.map(p => ({ ...p, run_id: inserted.run_id }));
+        eventInsertResult = await insertEventPersonalBests(rowsForEvent).catch(err => { throw err; });
+      } catch (e: any) {
+        const serialized = util.inspect(e, { depth: 5 });
+        eventInsertError = serialized;
+        console.error('Failed to insert event_personal_bests:', serialized);
+      }
+      // legacy swimmer_personal_bests write removed — writing only to typed `event_personal_bests`
+    }
+
+    return Response.json({ ok: true, wouldStore: pbsToStore.length, sample: pbsToStore.slice(0, 10), runId: inserted ? inserted.run_id : null, eventInsertResult, eventInsertError });
   } catch (err: any) {
     const serialized = util.inspect(err, { depth: 5 });
     return Response.json({ ok: false, error: serialized }, { status: 500 });

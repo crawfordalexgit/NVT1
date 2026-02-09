@@ -4,7 +4,7 @@ import { eventNameToCode } from "@/utils/eventNameToCode";
 import { parseDateString } from '@/lib/time';
 import fs from 'fs';
 import path from 'path';
-import { insertSnapshotRun, upsertSnapshotEntries, upsertSwimmerPersonalBests } from '@/lib/supabaseServer';
+import { insertSnapshotRun, upsertSnapshotEntries } from '@/lib/supabaseServer';
 
 async function sleep(ms: number) { return new Promise(res => setTimeout(res, ms)); }
 
@@ -64,6 +64,7 @@ export async function GET(req: NextRequest) {
                             try { await setCached(cacheKey, data, 60 * 60 * 6); } catch (e) {}
                         }
                         const swimmers = (data?.swimmers) || [];
+                        // keep a Tonbridge-only snapshot for the snapshots view
                         const tonbridge = swimmers.filter((s: any) => (s.club || '').toLowerCase().includes('tonbridge'));
                         const snapKey = `${ev}|${age}|${sex}|${dateStr}`;
                         snapshots[snapKey] = tonbridge;
@@ -71,37 +72,8 @@ export async function GET(req: NextRequest) {
                         const keyNoDate = `${ev}|${age}|${sex}`;
                         snapshotsAll[keyNoDate] = (swimmers || []).map((s: any) => ({ name: s.name, tiref: s.tiref, rank: s.rank, time: s.time })).slice(0, 200);
                         for (const t of tonbridge) {
-                            let pbs: any[] = [];
-                            if (t.tiref) {
-                                try {
-                                    const pbCacheKey = computeCacheKey({ route: 'personalBest', pool: 'L', stroke, sex, ageGroup: age, tiref: t.tiref, date: dateStr });
-                                    const cachedPB = await getCached(pbCacheKey);
-                                    if (cachedPB) {
-                                        pbs = cachedPB.data || [];
-                                        if (cachedPB?.url) checkedExternal.add(String(cachedPB.url));
-                                        debugSamples[`pb:${t.tiref}:${dateStr}`] = (pbs || []).slice(0,5);
-                                    } else {
-                                        const pbPath = `/api/loadPersonalBest?pool=L&stroke=${stroke}&sex=${sex}&ageGroup=${age}&tiref=${t.tiref}&date=${encodeURIComponent(dateStr)}`;
-                                        const pbAbsolute = new URL(pbPath, `http://${req.headers.get('host') || 'localhost:3000'}`).toString();
-                                        const pbRes = await fetch(pbAbsolute);
-                                        if (pbRes.ok) {
-                                            const pbJson = await pbRes.json();
-                                            pbs = pbJson.data || [];
-                                            if (pbJson?.url) checkedExternal.add(String(pbJson.url));
-                                            try { await setCached(pbCacheKey, pbJson, 60 * 60 * 24 * 7); } catch (e) {}
-                                            debugSamples[`pb:${t.tiref}:${dateStr}`] = (pbs || []).slice(0,5);
-                                        } else {
-                                            const txt = await pbRes.text().catch(() => '');
-                                            debugSamples[pbPath] = { ok: false, status: pbRes.status, text: txt };
-                                        }
-                                    }
-                                } catch (e) {
-                                    debugSamples[`err:${t.tiref}`] = String(e);
-                                }
-                                await sleep(20);
-                            }
-                            // record appearance with snapshot date
-                            report.push({ event: ev, stroke, age, sex, rank: t.rank, name: t.name, club: t.club, tiref: t.tiref, time: t.time, date: dateStr, personalBests: pbs, snapshotFor: dateStr });
+                            // record appearance with snapshot date. Do NOT fetch personal bests to speed up report.
+                            report.push({ event: ev, stroke, age, sex, rank: t.rank, name: t.name, club: t.club, tiref: t.tiref, time: t.time, date: dateStr, snapshotFor: dateStr });
                         }
                     } catch (e) {
                         // ignore and continue
@@ -164,34 +136,7 @@ export async function GET(req: NextRequest) {
                 }
                 console.log(`Persisting ${entries.length} snapshot_entries for run ${inserted.run_id}`);
                 if (entries.length) await upsertSnapshotEntries(inserted.run_id, entries);
-                // persist personal bests: store each collected personal best (if any) with its original pb_date when available
-                try {
-                    const pbRows: any[] = [];
-                    for (const s of out || []) {
-                        const pbsList = (s.personalBests || []);
-                        for (const pb of pbsList) {
-                            // pb.date expected like 'DD/MM/YY' or 'DD/MM/YYYY' — try robust parsing
-                            const rawDate = String(pb.date || '').trim();
-                            let parsed: Date | null = null;
-                            if (rawDate) parsed = parseDateString(rawDate);
-                            if (!parsed && rawDate) {
-                                const alt = new Date(rawDate);
-                                if (!isNaN(alt.getTime())) parsed = alt;
-                            }
-                            const pbDate = parsed ? parsed.toISOString().slice(0,10) : null; // preserve original PB date when possible
-                            const timeVal = (pb.time == null) ? null : (typeof pb.time === 'number' ? pb.time : Number(pb.time));
-                            if (timeVal == null || isNaN(timeVal)) continue;
-                            // payload was annotated when aggregating byName (includes event/age/sex)
-                            pbRows.push({ tiref: s.tiref ?? null, name: s.name ?? null, time: timeVal, meet: pb.meet ?? null, payload: pb, pb_date: pbDate });
-                        }
-                    }
-                    if (pbRows.length) {
-                        console.log(`Persisting ${pbRows.length} swimmer personal bests for run ${inserted.run_id}`);
-                        await upsertSwimmerPersonalBests(inserted.run_id, runIso, pbRows);
-                    }
-                } catch (pbErr) {
-                    console.error('Failed to persist swimmer_personal_bests:', String(pbErr));
-                }
+                // Personal-best persistence skipped to speed up report runs.
             } catch (dbErr) {
                 // on DB failure, do not write to local filesystem when Supabase is enabled
                 console.error('Supabase write failed; skipping filesystem fallback (USE_SUPABASE=true):', String(dbErr));

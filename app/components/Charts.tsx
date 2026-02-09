@@ -1,6 +1,6 @@
 
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, LabelList, ReferenceArea, Legend, Brush } from "recharts";
-import { formatTimeValue } from "@/lib/time";
+import { formatTimeValue, parseTimeString } from "@/lib/time";
 
 // Safe formatter to accept Recharts' possibly-undefined values
 const safeFormat = (value: any) => formatTimeValue(typeof value === 'number' ? value : (value == null ? null : Number(value)));
@@ -82,7 +82,7 @@ export function RankGraph({ data, maxRank = 50 }: { data: { month: string; rank:
 export function VirtualTop20Chart({ ranking }: { ranking: { name?: string; tiref?: string; time?: number | null }[] }) {
 	const data = (ranking || []).filter(r => r && r.time != null).slice(0,20).map((r, idx) => ({
 		name: r.name || (r.tiref || `#${idx+1}`),
-		time: typeof r.time === 'number' ? r.time : (r.time == null ? null : Number(r.time))
+		time: (typeof r.time === 'number') ? r.time : (typeof r.time === 'string' ? parseTimeString(r.time) : null)
 	}));
 	// Recharts expects numeric x-values; we'll render horizontal bars with names on Y axis
 	const safeFormatLocal = (v: any) => formatTimeValue(typeof v === 'number' ? v : (v == null ? null : Number(v)));
@@ -103,7 +103,7 @@ export function VirtualTop20Chart({ ranking }: { ranking: { name?: string; tiref
 	);
 }
 
-export function Virtual20thSeriesChart({ months, trackedSeries, compareMonths, highlightStart, highlightEnd }: { months: { month: string; ranking: any[] }[]; trackedSeries?: { month: string; time: number | null }[]; compareMonths?: { month: string; ranking: any[] }[]; highlightStart?: string; highlightEnd?: string }) {
+export function Virtual20thSeriesChart({ months, trackedSeries, compareMonths, fallbackCutoffSeries, fallbackPrevCutoffSeries, nationalsCutoffSeries, showNationals, highlightStart, highlightEnd }: { months: { month: string; ranking: any[] }[]; trackedSeries?: { month: string; time: number | null }[]; compareMonths?: { month: string; ranking: any[] }[]; fallbackCutoffSeries?: { month: string; cutoff: number | null }[]; fallbackPrevCutoffSeries?: { month: string; cutoff: number | null }[]; nationalsCutoffSeries?: { month: string; cutoff: number | null }[]; showNationals?: boolean; highlightStart?: string; highlightEnd?: string }) {
 	// Parent supplies the months to display (may be sliced/filtered for the selected window)
 	const lastMonths = months || [];
 
@@ -119,12 +119,25 @@ export function Virtual20thSeriesChart({ months, trackedSeries, compareMonths, h
 		const tracked = (trackedSeries || []).find(t => t.month === monthKey);
 		const compareObj = (compareMonths || []).find(m => m.month === monthKey) || null;
 		const compareItem = (Array.isArray(compareObj?.ranking) && compareObj?.ranking[19]) || null;
+		const toNum = (v: any) => {
+			if (v == null) return null;
+			if (typeof v === 'number') return v;
+			if (typeof v === 'string') return parseTimeString(v);
+			return null;
+		};
+		// If the month's ranking doesn't contain a 20th item, fall back to precomputed cutoff if provided
+		const fallback = (fallbackCutoffSeries || []).find(f => f.month === monthKey);
+		const fallbackPrev = (fallbackPrevCutoffSeries || []).find(f => f.month === monthKey);
+		const timeVal = item ? toNum(item.time) : (fallback ? (typeof fallback.cutoff === 'number' ? fallback.cutoff : (fallback.cutoff == null ? null : Number(fallback.cutoff))) : null);
+		const nationalsFallback = (nationalsCutoffSeries || []).find(f => f.month === monthKey);
+		const nationalsVal = nationalsFallback ? (typeof nationalsFallback.cutoff === 'number' ? nationalsFallback.cutoff : (nationalsFallback.cutoff == null ? null : Number(nationalsFallback.cutoff))) : null;
 		return {
 			month: monthKey,
-			time: item && item.time != null ? (typeof item.time === 'number' ? item.time : Number(item.time)) : null,
-			name: item ? item.name : null,
-			trackedTime: tracked && tracked.time != null ? (typeof tracked.time === 'number' ? tracked.time : Number(tracked.time)) : null,
-			compareTime: compareItem && compareItem.time != null ? (typeof compareItem.time === 'number' ? compareItem.time : Number(compareItem.time)) : null
+			time: timeVal,
+			name: item ? item.name : (fallback ? 'fallback cutoff' : null),
+			trackedTime: tracked ? toNum(tracked.time) : null,
+			compareTime: compareItem ? toNum(compareItem.time) : (fallbackPrev ? (typeof fallbackPrev.cutoff === 'number' ? fallbackPrev.cutoff : (fallbackPrev.cutoff == null ? null : Number(fallbackPrev.cutoff))) : null),
+			nationals: nationalsVal
 		};
 	});
 
@@ -164,7 +177,11 @@ export function Virtual20thSeriesChart({ months, trackedSeries, compareMonths, h
 						<YAxis stroke="#fff" tickFormatter={(v:any) => formatTimeValue(typeof v === 'number' ? v : (v == null ? null : Number(v)))} domain={min != null && max != null ? [min, max] : ["auto", "auto"]} />
 						<Legend />
 						<Tooltip labelStyle={{ color: '#fff' }} contentStyle={{ background: '#23243a', color: '#fff' }} formatter={(v:any) => formatTimeValue(typeof v === 'number' ? v : (v == null ? null : Number(v)))} labelFormatter={(lab:any) => `Month: ${lab}`} />
-						<Line type="monotone" dataKey="time" stroke="#f97316" strokeWidth={2} dot={{ r: 3 }} strokeDasharray="6 4" strokeOpacity={0.6} connectNulls={true} name="Current Year Cutoff" />
+						<Line type="monotone" dataKey="time" stroke="#f97316" strokeWidth={2} dot={{ r: 3 }} strokeDasharray="6 4" strokeOpacity={0.6} connectNulls={true} name="Next Gen (20)" />
+						{/* optional Nationals line (40th) passed via fallbackCutoffSeriesNationals in props if available */}
+						{ showNationals && nationalsCutoffSeries && nationalsCutoffSeries.length > 0 && (
+							<Line type="monotone" dataKey="nationals" stroke="#ef4444" strokeWidth={2} dot={{ r: 2 }} strokeDasharray="2 4" strokeOpacity={0.9} connectNulls={true} name="Nationals (40)" />
+						)}
 						{compareMonths && compareMonths.length > 0 && (
 							<Line type="monotone" dataKey="compareTime" stroke="#10b981" strokeWidth={2} dot={{ r: 2 }} strokeDasharray="4 6" strokeOpacity={0.9} connectNulls={true} name="Previous Year" />
 						)}

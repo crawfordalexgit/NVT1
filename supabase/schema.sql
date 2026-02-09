@@ -126,3 +126,6 @@ CREATE TABLE IF NOT EXISTS event_personal_bests (
 CREATE INDEX IF NOT EXISTS idx_event_personal_bests_tiref ON event_personal_bests(tiref);
 CREATE INDEX IF NOT EXISTS idx_event_personal_bests_event ON event_personal_bests(event);
 CREATE INDEX IF NOT EXISTS idx_event_personal_bests_pb_date ON event_personal_bests(pb_date);
+
+-- Debug table to store predicted qualifying time calculations for inspection
+-- (debug table `predicted_qual_debug` was used during development and has been removed)

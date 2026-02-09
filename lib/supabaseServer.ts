@@ -237,9 +237,8 @@ export async function getSnapshotEntriesByKey(key: string) {
 // attributes were stored in the PB payload when persisted.
 export async function getPersonalBestsByEvent(event: string, age: string | number, sex: string) {
   if (!event) return [];
-  // Prefer typed `event_personal_bests` if present (faster + typed columns)
+  // Only use the typed `event_personal_bests` table going forward.
   try {
-    // Filter typed event PBs by event, age and sex when available for accurate queries
     const evQBuilder = supabase.from('event_personal_bests').select('time, name, tiref, pb_date, meet, payload, event, age, sex, rank, club, yob, venue, level').eq('event', String(event));
     if (age != null && String(age).trim() !== '') evQBuilder.eq('age', String(age));
     if (sex != null && String(sex).trim() !== '') evQBuilder.eq('sex', String(sex));
@@ -263,110 +262,10 @@ export async function getPersonalBestsByEvent(event: string, age: string | numbe
         level: r.level ?? null
       }));
     }
-    // If filtering by age/sex returned no rows, try a broader query without age/sex
-    if ((!evData || evData.length === 0) && (age != null || sex != null)) {
-      try {
-        const fallback = await supabase.from('event_personal_bests').select('time, name, tiref, pb_date, meet, payload, event, age, sex, rank, club, yob, venue, level').eq('event', String(event)).order('pb_date', { ascending: true });
-        if (fallback && (fallback.data || []).length) {
-          return (fallback.data || []).map((r: any) => ({
-            time: r.time,
-            name: r.name,
-            tiref: r.tiref,
-            pb_date: r.pb_date,
-            payload: r.payload,
-            meet: r.meet,
-            event: r.event,
-            age: r.age,
-            sex: r.sex,
-            rank: r.rank ?? null,
-            club: r.club ?? null,
-            yob: r.yob ?? null,
-            venue: r.venue ?? null,
-            level: r.level ?? null
-          }));
-        }
-      } catch (e) {
-        // ignore and continue to legacy table fallback
-      }
-    }
   } catch (e) {
-    // ignore and fall back to legacy table
+    throw e;
   }
-
-  // payload contains { event, age, sex } when persisted in generateReport
-  // Prefer querying a dedicated `event` column on the legacy table if present (faster). Fall back to JSON payload match.
-  // Try a direct event/age/sex query on swimmer_personal_bests if the columns exist
-  const eqBuilder = supabase.from('swimmer_personal_bests').select('time, name, tiref, pb_date, payload, meet, event, run_id').eq('event', String(event));
-  if (age != null && String(age).trim() !== '') eqBuilder.eq('age', String(age));
-  if (sex != null && String(sex).trim() !== '') eqBuilder.eq('sex', String(sex));
-  const eqFilter = eqBuilder.order('pb_date', { ascending: true });
-  const { data: eqData, error: eqErr } = await eqFilter;
-    if (!eqErr && eqData && eqData.length) {
-    return (eqData || []).map((r: any) => ({
-      time: r.time,
-      name: r.name,
-      tiref: r.tiref,
-      pb_date: r.pb_date,
-      payload: r.payload,
-      meet: r.meet,
-      event: r.event,
-      rank: r.rank ?? null,
-      club: r.club ?? null,
-      yob: r.yob ?? null,
-      venue: r.venue ?? null,
-      level: r.level ?? null
-    }));
-    }
-  // If the direct event+age+sex query returned nothing, try a broader event-only query
-  if ((!eqData || eqData.length === 0) && (age != null || sex != null)) {
-    try {
-      const fallbackEq = await supabase.from('swimmer_personal_bests').select('time, name, tiref, pb_date, payload, meet, event, run_id').eq('event', String(event)).order('pb_date', { ascending: true });
-      if (fallbackEq && (fallbackEq.data || []).length) {
-        return (fallbackEq.data || []).map((r: any) => ({
-          time: r.time,
-          name: r.name,
-          tiref: r.tiref,
-          pb_date: r.pb_date,
-          payload: r.payload,
-          meet: r.meet,
-          event: r.event,
-          rank: r.rank ?? null,
-          club: r.club ?? null,
-          yob: r.yob ?? null,
-          venue: r.venue ?? null,
-          level: r.level ?? null
-        }));
-      }
-    } catch (e) {
-      // ignore and continue to payload-based fallback
-    }
-  }
-
-  const payloadMatch: any = { event: String(event) };
-  if (age != null) payloadMatch.age = String(age);
-  if (sex) payloadMatch.sex = String(sex);
-
-  const q = supabase
-    .from('swimmer_personal_bests')
-    .select('time, name, tiref, pb_date, payload, meet')
-    .contains('payload', payloadMatch)
-    .order('pb_date', { ascending: true });
-
-  const { data, error } = await q;
-  if (error) throw error;
-  return (data || []).map((r: any) => ({
-    time: r.time,
-    name: r.name,
-    tiref: r.tiref,
-    pb_date: r.pb_date,
-    payload: r.payload,
-    meet: r.meet,
-    rank: r.rank ?? null,
-    club: r.club ?? null,
-    yob: r.yob ?? null,
-    venue: r.venue ?? null,
-    level: r.level ?? null
-  }));
+  return [];
 }
 
 // Persist and read monthly virtual ranking/cutoff series for an event|age|sex key
@@ -473,3 +372,5 @@ export async function getEventPersonalBestsByTiref(tiref: string, limit = 50) {
   if (error) throw error;
   return (data || []) as any[];
 }
+
+// Debug persistence removed: predicted_qual_debug helpers retired

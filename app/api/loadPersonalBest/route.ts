@@ -64,6 +64,20 @@ export async function GET(req: NextRequest) {
 	}
 	const html = await res.text();
 	const $ = cheerio.load(html);
+
+	// Attempt to infer swimmer-level metadata (YoB and sex) from the page text
+	const pageText = $('body').text();
+	let inferredYob: number | null = null;
+	let inferredSex: string | null = null;
+	try {
+		const yobMatch = pageText.match(/(?:yob|year of birth|born)[:\s]*((?:19|20)\d{2})/i);
+		if (yobMatch) inferredYob = Number(yobMatch[1]);
+		const sexMatch = pageText.match(/(?:sex|gender)[:\s]*(male|female|m|f)/i);
+		if (sexMatch) {
+			const s = String(sexMatch[1]).toUpperCase();
+			inferredSex = s.startsWith('M') ? 'M' : (s.startsWith('F') ? 'F' : null);
+		}
+	} catch (e) { /* ignore inference errors */ }
 	const table = $("table").first();
 	if (!table.length) return Response.json({ error: "Personal best table not found" }, { status: 404 });
 	const rows = table.find("tr").slice(1);
@@ -75,7 +89,10 @@ export async function GET(req: NextRequest) {
 			meet: cells.eq(4).text().trim(),
 			venue: cells.eq(5).text().trim(),
 			level: cells.eq(7).text().trim(),
-			event: Object.entries(eventNameToCode).find(([,v]) => v === strokeNum)?.[0] || null
+			event: Object.entries(eventNameToCode).find(([,v]) => v === strokeNum)?.[0] || null,
+			// attach any inferred metadata so callers (and payload storage) can persist it
+			yob: inferredYob,
+			sex: inferredSex
 		};
 	}).get();
 	const payload = { data, url };

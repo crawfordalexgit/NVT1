@@ -141,7 +141,13 @@ export function parseDateString(date: string): Date | null {
 
 // Converts a date string to YYYY-MM format (zero-padded month)
 export function getMonthKey(date: string): string | null {
-	const d = parseDateString(date);
+	// Try parsing DD/MM/YYYY or DD/MM/YY first
+	let d = parseDateString(date);
+	if (!d) {
+		// Fallback: try native Date parsing (handles ISO YYYY-MM-DD etc.)
+		const nd = new Date(date);
+		if (!Number.isNaN(nd.getTime())) d = nd;
+	}
 	if (!d) return null;
 	const year = d.getFullYear();
 	const month = (d.getMonth() + 1).toString().padStart(2, "0");
@@ -189,93 +195,100 @@ export function calculateMonthlyCutoffFromTop50(
 				if (m > 12) { m = 1; y++; }
 			}
 		}
-		months = months.filter(m => range.includes(m));
+		// Use the full inclusive range so months with no swims are still represented
+		months = range;
 	} else {
 		// limit to last N months
 		if (months.length > monthsToShow) months = months.slice(months.length - monthsToShow);
 	}
 
-	// determine cutoff size: 20 only for 13 year olds; 40 for age 14+
-	const cutoffSize = ageGroup === '13' ? 20 : 40;
-	// parse today's top-50 times and determine floor (cutoffSize-th)
+	// parse today's top-50 times for floor computation
 	const top50 = (rankings || []).slice(0, 50).map(r => ({ name: r.name, time: typeof r.time === 'number' ? r.time : (typeof r.time === 'string' ? parseTimeString(String(r.time)) : null) }));
-	const floor = top50[cutoffSize - 1]?.time ?? null;
 
-	const cutoffSeries: { month: string; cutoff: number | null; reason?: string }[] = [];
-	let lastCutoff: number | null = null;
+	// Helper: compute cutoff series for a given cutoffSize
+	const computeForSize = (cutoffSize: number) => {
+		const floor = top50[cutoffSize - 1]?.time ?? null;
+		const cutoffSeries: { month: string; cutoff: number | null; reason?: string }[] = [];
+		let lastCutoff: number | null = null;
 
-	months.forEach(month => {
-		// build cumulative bests for each top50 swimmer up to and including this month
-		const cumList: { name: string; cumulativeBest: number | null; swimmer?: any }[] = top50.map(t => {
-			const swimmer = swimmers.find(s => s.name === t.name);
-			const bestTimes = (swimmer?.data || [])
-				.map(pb => {
-					const m = getMonthKey(pb.date);
-					if (!m) return null;
-					// enforce level filter when computing cumulative bests
-					const itemLevel = (pb as any).level || (pb as any).payload?.level || null;
-					if (levelFilter && levelFilter !== 'All') {
-						if (!itemLevel || String(itemLevel) !== String(levelFilter)) return null;
-					}
-					return m <= month ? (typeof pb.time === 'number' ? pb.time : (typeof pb.time === 'string' ? parseTimeString(pb.time) : null)) : null;
-				})
-				.filter((x): x is number => x != null && !isNaN(x));
-			const best = bestTimes.length > 0 ? Math.min(...bestTimes) : null;
-			return { name: t.name, cumulativeBest: best, swimmer };
-		});
+		months.forEach(month => {
+			// build cumulative bests for each top50 swimmer up to and including this month
+			const cumList: { name: string; cumulativeBest: number | null; swimmer?: any }[] = top50.map(t => {
+				const swimmer = swimmers.find(s => s.name === t.name);
+				const bestTimes = (swimmer?.data || [])
+					.map(pb => {
+						const m = getMonthKey(pb.date);
+						if (!m) return null;
+						// enforce level filter when computing cumulative bests
+						const itemLevel = (pb as any).level || (pb as any).payload?.level || null;
+						if (levelFilter && levelFilter !== 'All') {
+							if (!itemLevel || String(itemLevel) !== String(levelFilter)) return null;
+						}
+						return m <= month ? (typeof pb.time === 'number' ? pb.time : (typeof pb.time === 'string' ? parseTimeString(pb.time) : null)) : null;
+					})
+					.filter((x): x is number => x != null && !isNaN(x));
+				const best = bestTimes.length > 0 ? Math.min(...bestTimes) : null;
+				return { name: t.name, cumulativeBest: best, swimmer };
+			});
 
-		const eligible = cumList.filter(c => c.cumulativeBest != null) as { name: string; cumulativeBest: number; swimmer?: any }[];
-		eligible.sort((a, b) => a.cumulativeBest - b.cumulativeBest);
+			const eligible = cumList.filter(c => c.cumulativeBest != null) as { name: string; cumulativeBest: number; swimmer?: any }[];
+			eligible.sort((a, b) => a.cumulativeBest - b.cumulativeBest);
 
-		let cutoff: number | null = null;
-		let reason = '';
-		// keep track whether we computed a candidate from data (non-null)
-		let originalCandidate: number | null = null;
+			let cutoff: number | null = null;
+			let reason = '';
+			// keep track whether we computed a candidate from data (non-null)
+			let originalCandidate: number | null = null;
 
-		if (eligible.length >= cutoffSize) {
-			const virtualNth = eligible[cutoffSize - 1];
-			// find slowest swim by that swimmer in the month
-			const swimsThisMonth = (virtualNth.swimmer?.data || []).filter((s: any) => getMonthKey(s.date) === month && s.time != null).map((s: any) => (typeof s.time === 'number' ? s.time : (typeof s.time === 'string' ? parseTimeString(s.time) : null))).filter((x: any): x is number => x != null && !isNaN(x));
-			if (swimsThisMonth.length > 0) {
-				cutoff = Math.max(...swimsThisMonth);
-				reason = `virtual${cutoffSize} swim in month: ${virtualNth.name}`;
-			} else {
-				cutoff = virtualNth.cumulativeBest;
-				reason = `virtual${cutoffSize} cumulativeBest (no month swim)`;
-			}
-			originalCandidate = cutoff;
-		} else {
-			// fewer than 20 eligible: use slowest swim this month across pool if available
-			const swimsThisMonthAll = (swimmers.flatMap(s => s.data) || []).filter((s: any) => getMonthKey(s.date) === month && s.time != null).map((s: any) => (typeof s.time === 'number' ? s.time : (typeof s.time === 'string' ? parseTimeString(s.time) : null))).filter((x: any): x is number => x != null && !isNaN(x));
-			if (swimsThisMonthAll.length > 0) {
-				cutoff = Math.max(...swimsThisMonthAll);
-				reason = '<20 eligible swimmers';
+			if (eligible.length >= cutoffSize) {
+				const virtualNth = eligible[cutoffSize - 1];
+				// find slowest swim by that swimmer in the month
+				const swimsThisMonth = (virtualNth.swimmer?.data || []).filter((s: any) => getMonthKey(s.date) === month && s.time != null).map((s: any) => (typeof s.time === 'number' ? s.time : (typeof s.time === 'string' ? parseTimeString(s.time) : null))).filter((x: any): x is number => x != null && !isNaN(x));
+				if (swimsThisMonth.length > 0) {
+					cutoff = Math.max(...swimsThisMonth);
+					reason = `virtual${cutoffSize} swim in month: ${virtualNth.name}`;
+				} else {
+					cutoff = virtualNth.cumulativeBest;
+					reason = `virtual${cutoffSize} cumulativeBest (no month swim)`;
+				}
 				originalCandidate = cutoff;
 			} else {
-				cutoff = null;
-				reason = 'no swims - carry forward';
+				// fewer than cutoffSize eligible: use slowest swim this month across pool if available
+				const swimsThisMonthAll = (swimmers.flatMap(s => s.data) || []).filter((s: any) => getMonthKey(s.date) === month && s.time != null).map((s: any) => (typeof s.time === 'number' ? s.time : (typeof s.time === 'string' ? parseTimeString(s.time) : null))).filter((x: any): x is number => x != null && !isNaN(x));
+				if (swimsThisMonthAll.length > 0) {
+					cutoff = Math.max(...swimsThisMonthAll);
+					reason = `<${cutoffSize} eligible swimmers`;
+					originalCandidate = cutoff;
+				} else {
+					cutoff = null;
+					reason = 'no swims - carry forward';
+				}
 			}
-		}
 
-		// enforce floor
-		if (floor != null && cutoff != null && cutoff < floor) {
-			cutoff = floor;
-			reason = 'floor enforced';
-		}
-
-		// monotonic rule: only enforce when we had no original candidate from this month's data
-		if (originalCandidate == null) {
-			if (lastCutoff != null && cutoff != null && cutoff < lastCutoff) {
-				cutoff = lastCutoff;
-				reason = 'monotonic enforced';
+			// enforce floor
+			if (floor != null && cutoff != null && cutoff < floor) {
+				cutoff = floor;
+				reason = 'floor enforced';
 			}
-		}
 
-		if (cutoff == null) cutoff = lastCutoff;
+			// monotonic rule: only enforce when we had no original candidate from this month's data
+			if (originalCandidate == null) {
+				if (lastCutoff != null && cutoff != null && cutoff < lastCutoff) {
+					cutoff = lastCutoff;
+					reason = 'monotonic enforced';
+				}
+			}
 
-		cutoffSeries.push({ month, cutoff, reason });
-		lastCutoff = cutoff;
-	});
+			if (cutoff == null) cutoff = lastCutoff;
+
+			cutoffSeries.push({ month, cutoff, reason });
+			lastCutoff = cutoff;
+		});
+		return { cutoffSeries };
+	};
+
+	// compute Next Gen (20) and Nationals (40) when applicable
+	const nextGen = computeForSize(20);
+	const nationals = computeForSize(40);
 
 	// tracked series: for each month, use the swimmer's most recent swim up to that month and carry it forward
 	const trackedSeries: { month: string; time: number | null }[] = months.map(month => {
@@ -296,5 +309,6 @@ export function calculateMonthlyCutoffFromTop50(
 		return { month, time: candidateSwims[0].t };
 	});
 
-	return { cutoffSeries, trackedSeries };
+	// By default keep `cutoffSeries` as Next Gen (20) for backward compatibility.
+	return { cutoffSeries: nextGen.cutoffSeries, trackedSeries, cutoffSeriesNextGen: nextGen.cutoffSeries, cutoffSeriesNationals: nationals.cutoffSeries };
 }
