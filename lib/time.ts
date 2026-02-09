@@ -165,7 +165,7 @@ export function calculateMonthlyCutoffFromTop50(
 	startMonth?: string,
 	endMonth?: string,
 	levelFilter?: string
-): { cutoffSeries: { month: string; cutoff: number | null; reason?: string }[]; trackedSeries: { month: string; time: number | null }[] } {
+): { cutoffSeries: { month: string; cutoff: number | null; reason?: string }[]; trackedSeries: { month: string; time: number | null }[]; cutoffSeriesNextGen?: { month: string; cutoff: number | null; reason?: string }[]; cutoffSeriesNationals?: { month: string; cutoff: number | null; reason?: string }[] } {
 	// group swims by month
 	const groupedByMonth: Record<string, { name: string; time: number | null; date: string; meet?: string }[]> = {};
 	swimmers.forEach(sw => {

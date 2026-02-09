@@ -394,7 +394,7 @@ export async function GET(req: NextRequest) {
 
     // For each month, compute cumulative best up to that month for each swimmer
     for (const month of months) {
-      const entries: { name?: string|null; tiref?: string|null; time: number; rank?: number|null; club?: string|null; yob?: number|null; meet?: string|null; venue?: string|null; level?: string|null }[] = [];
+      const entries: { name?: string|null; tiref?: string|null; time: number; rank?: number|null; club?: string|null; yob?: number|null; age?: number|null; meet?: string|null; venue?: string|null; level?: string|null }[] = [];
       Object.keys(bySwimmer).forEach(id => {
         const sb = bySwimmer[id];
         // find best <= month

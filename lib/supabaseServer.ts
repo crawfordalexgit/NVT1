@@ -339,7 +339,7 @@ export async function insertEventPBImport(runId: string | null, key: string, eve
 }
 
 // Insert many event_personal_bests rows (bulk). Rows should be normalized to typed columns.
-export async function insertEventPersonalBests(rows: Array<{ tiref?: string | null; name?: string | null; event?: string | null; age?: string | null; sex?: string | null; pb_date?: string | null; time?: number | null; meet?: string | null; payload?: any; run_id?: string | null }>) {
+export async function insertEventPersonalBests(rows: Array<{ tiref?: string | null; name?: string | null; event?: string | null; age?: string | null; sex?: string | null; pb_date?: string | null; time?: number | null; meet?: string | null; payload?: any; run_id?: string | null; rank?: number | null; club?: string | null; yob?: number | null; venue?: string | null; level?: string | null }>) {
   if (!rows || rows.length === 0) return { inserted: 0 };
   const cleaned = rows.map(r => ({
     tiref: r.tiref == null || String(r.tiref).trim() === '' ? null : String(r.tiref),
